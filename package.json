@@ -1,0 +1,26 @@
+{
+  "name": "mavuno-ai",
+  "version": "1.0.0",
+  "description": "MavunoAI — AI-powered farm intelligence & agri-credit platform for smallholder farmers. Turning harvests into credit history.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "keywords": [
+    "agritech",
+    "fintech",
+    "kenya",
+    "hackathon",
+    "credit-scoring",
+    "crop-disease"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "docx": "^9.7.1",
+    "pptxgenjs": "^4.0.1",
+    "puppeteer-core": "^25.3.0"
+  }
+}

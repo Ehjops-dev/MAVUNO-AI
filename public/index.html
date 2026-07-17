@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MavunoAI — Turning harvests into credit history</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌾</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Albert+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ===================== SIDEBAR ===================== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">🌾</div>
+      <div>
+        <div class="brand-name">Mavuno<span>AI</span></div>
+        <div class="brand-tag">harvest · intelligence</div>
+      </div>
+    </div>
+
+    <div class="profile-select-wrap">
+      <select id="profileSwitcher" class="profile-select">
+        <option value="">Loading profiles...</option>
+      </select>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="dashboard">
+        <svg viewBox="0 0 24 24"><path d="M3 12l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>
+        Dashboard
+      </button>
+      <button class="nav-item" data-view="doctor">
+        <svg viewBox="0 0 24 24"><path d="M12 2C8 6 4 8 4 13a8 8 0 0 0 16 0c0-5-4-7-8-11zm0 17a5 5 0 0 1-5-5h2a3 3 0 0 0 3 3z"/></svg>
+        Crop Doctor
+      </button>
+      <button class="nav-item" data-view="markets">
+        <svg viewBox="0 0 24 24"><path d="M3 20h18v2H3zM5 18h3v-7H5zm5.5 0h3V6h-3zm5.5 0h3v-4h-3z"/></svg>
+        Markets
+      </button>
+      <button class="nav-item" data-view="harvests">
+        <svg viewBox="0 0 24 24"><path d="M4 10h16l-1.5 10a2 2 0 0 1-2 1.7h-9A2 2 0 0 1 5.5 20zM12 2a5 5 0 0 1 5 5v1H7V7a5 5 0 0 1 5-5zm0 2a3 3 0 0 0-3 3v1h6V7a3 3 0 0 0-3-3z"/></svg>
+        My Harvests
+      </button>
+      <button class="nav-item" data-view="credit">
+        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8zm1 4v5.6l4.8 2.8-1 1.7L11 13V6z"/></svg>
+        Mavuno Score
+      </button>
+    </nav>
+
+    <button class="ussd-btn" id="ussdBtn">
+      <span class="ussd-code">*384*626#</span>
+      <span class="ussd-label">No smartphone? Dial in →</span>
+    </button>
+
+    <div class="sidebar-farmer" id="sidebarFarmer">
+      <div class="avatar">AC</div>
+      <div>
+        <div class="farmer-name">—</div>
+        <div class="farmer-county">—</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===================== MAIN ===================== -->
+  <main class="main">
+
+    <!-- ============ DASHBOARD ============ -->
+    <section class="view active" id="view-dashboard">
+      <header class="view-head">
+        <div>
+          <p class="eyebrow" id="greeting">Habari ya asubuhi</p>
+          <h1 class="headline">Your shamba,<br><em>at a glance.</em></h1>
+        </div>
+        <div class="head-score" id="headScore">
+          <div class="head-score-num">—</div>
+          <div class="head-score-label">Mavuno Score</div>
+        </div>
+      </header>
+
+      <div class="stat-row" id="statRow"></div>
+
+      <div class="dash-grid">
+        <div class="card weather-card">
+          <div class="card-title">5-day forecast · <span id="weatherCounty">—</span></div>
+          <div class="weather-strip" id="weatherStrip"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Today's prices <span class="muted">(avg across markets, KES/kg)</span></div>
+          <div class="ticker-list" id="tickerList"></div>
+        </div>
+        <div class="card span-2">
+          <div class="card-title">Agronomist's advice this week</div>
+          <div class="advice-grid" id="adviceGrid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CROP DOCTOR ============ -->
+    <section class="view" id="view-doctor">
+      <header class="view-head">
+        <div>
+          <p class="eyebrow">AI Crop Doctor</p>
+          <h1 class="headline">Snap a leaf.<br><em>Save a season.</em></h1>
+        </div>
+      </header>
+
+      <div class="doctor-grid">
+        <div class="card doctor-input">
+          <label class="field-label">1 · Which crop is this?</label>
+          <div class="crop-pills" id="cropPills"></div>
+
+          <label class="field-label">2 · Upload a photo of the affected leaf</label>
+          <label class="dropzone" id="dropzone">
+            <input type="file" id="leafInput" accept="image/*" hidden>
+            <svg viewBox="0 0 24 24" class="dz-icon"><path d="M12 3l5 5h-3v6h-4V8H7zm-7 15h14v2H5z" transform="translate(2 0)"/></svg>
+            <span class="dz-text">Tap to upload or drop image here</span>
+            <span class="dz-hint">Works offline · analysed on your phone</span>
+          </label>
+          <canvas id="leafCanvas" hidden></canvas>
+          <div class="preview-wrap" id="previewWrap" hidden>
+            <img id="leafPreview" alt="Uploaded leaf">
+            <button class="btn btn-gold" id="analyzeBtn">Diagnose now</button>
+          </div>
+        </div>
+
+        <div class="card doctor-result" id="doctorResult">
+          <div class="doctor-empty" id="doctorEmpty">
+            <div class="pulse-leaf">🍃</div>
+            <p>Diagnosis will appear here.<br>Every scan is saved to your farm record.</p>
+          </div>
+          <div id="diagnosisCard" hidden></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:24px">
+        <div class="card-title">Recent scans</div>
+        <div id="scanHistory" class="scan-history"></div>
+      </div>
+    </section>
+
+    <!-- ============ MARKETS ============ -->
+    <section class="view" id="view-markets">
+      <header class="view-head">
+        <div>
+          <p class="eyebrow">Market intelligence</p>
+          <h1 class="headline">Sell at the price<br><em>you deserve.</em></h1>
+        </div>
+      </header>
+
+      <div class="crop-pills big" id="marketCropPills"></div>
+
+      <div class="market-grid">
+        <div class="card span-2">
+          <div class="card-title">60-day price trend · <span id="chartCropLabel">maize</span> <span class="muted">(KES/kg)</span></div>
+          <div class="chart-wrap"><svg id="priceChart" viewBox="0 0 720 300" preserveAspectRatio="none"></svg></div>
+          <div class="chart-legend" id="chartLegend"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Best market today</div>
+          <div id="bestMarkets" class="best-markets"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ HARVESTS ============ -->
+    <section class="view" id="view-harvests">
+      <header class="view-head">
+        <div>
+          <p class="eyebrow">Harvest ledger</p>
+          <h1 class="headline">Every bag logged<br><em>builds your credit.</em></h1>
+        </div>
+        <button class="btn btn-gold" id="addHarvestBtn">+ Log harvest</button>
+      </header>
+
+      <div class="card">
+        <table class="ledger" id="ledgerTable">
+          <thead><tr>
+            <th>Crop</th><th>Season</th><th>Quantity</th><th>Sold @</th><th>Market</th><th>Date</th><th>Revenue</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ CREDIT / SCORE ============ -->
+    <section class="view" id="view-credit">
+      <header class="view-head">
+        <div>
+          <p class="eyebrow">Agri-credit</p>
+          <h1 class="headline">Your harvests are<br><em>your collateral.</em></h1>
+        </div>
+      </header>
+
+      <div class="credit-grid">
+        <div class="card gauge-card">
+          <svg id="scoreGauge" viewBox="0 0 260 170"></svg>
+          <div class="gauge-tier" id="gaugeTier">—</div>
+          <p class="gauge-note">Built from 5 signals in your farm record — no bank statement, no title deed, no guarantor.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">Score breakdown</div>
+          <div id="scoreBreakdown" class="breakdown"></div>
+        </div>
+        <div class="card span-2">
+          <div class="card-title">Loan offers you qualify for</div>
+          <div id="loanOffers" class="offers"></div>
+          <div class="card-title" style="margin-top:28px">Your loans</div>
+          <div id="loanList" class="loan-list"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============ ADD HARVEST MODAL ============ -->
+<div class="modal-backdrop" id="harvestModal" hidden>
+  <div class="modal">
+    <h2 class="modal-title">Log a harvest</h2>
+    <form id="harvestForm">
+      <div class="form-row">
+        <label>Crop
+          <select name="crop" required>
+            <option value="maize">Maize</option><option value="beans">Beans</option>
+            <option value="potatoes">Potatoes</option><option value="tomatoes">Tomatoes</option>
+            <option value="cabbage">Cabbage</option>
+          </select>
+        </label>
+        <label>Season
+          <select name="season" required>
+            <option>Long Rains 2026</option><option>Short Rains 2025</option><option>Long Rains 2025</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label>Quantity (kg) <input name="quantity_kg" type="number" min="1" required placeholder="e.g. 1500"></label>
+        <label>Sold price (KES/kg) <input name="sold_price_per_kg" type="number" min="0" step="0.5" placeholder="leave blank if unsold"></label>
+      </div>
+      <div class="form-row">
+        <label>Market
+          <select name="market">
+            <option value="">— not sold yet —</option>
+            <option>Wakulima (Nairobi)</option><option>Eldoret Main</option><option>Nakuru Top</option>
+            <option>Kibuye (Kisumu)</option><option>Kongowea (Mombasa)</option>
+          </select>
+        </label>
+        <label>Harvest date <input name="harvest_date" type="date" required></label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="cancelHarvest">Cancel</button>
+        <button type="submit" class="btn btn-gold">Save to ledger</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ USSD SIMULATOR ============ -->
+<div class="modal-backdrop" id="ussdModal" hidden>
+  <div class="phone">
+    <div class="phone-notch"></div>
+    <div class="phone-screen" id="ussdScreen"></div>
+    <div class="phone-input">
+      <input id="ussdInput" placeholder="Reply…" autocomplete="off">
+      <button class="btn btn-gold" id="ussdSend">Send</button>
+    </div>
+    <button class="phone-close" id="ussdClose">End session</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
