@@ -4,15 +4,48 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MavunoAI — Turning harvests into credit history</title>
+<meta name="theme-color" content="#122619">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌾</text></svg>">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/css/style.css">
+<!-- Google Fonts is loaded non-blockingly: with no connection the app still
+     renders immediately in the local fallback stack. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Albert+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/css/style.css">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Albert+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet" media="print" onload="this.media='all'">
 </head>
 <body>
 
-<div class="app">
+<!-- ===================== LOGIN ===================== -->
+<div class="login-screen" id="loginScreen" hidden>
+  <form class="login-card" id="loginForm">
+    <div class="brand">
+      <div class="brand-mark">🌾</div>
+      <div>
+        <div class="brand-name">Mavuno<span>AI</span></div>
+        <div class="brand-tag">harvest · intelligence</div>
+      </div>
+    </div>
+    <h1 class="login-title">Sign in to your farm record</h1>
+    <label class="login-field">Phone number
+      <input id="loginPhone" name="phone" type="tel" inputmode="tel" autocomplete="username"
+             placeholder="07XX XXX XXX" required>
+    </label>
+    <label class="login-field">PIN
+      <input id="loginPin" name="pin" type="password" inputmode="numeric" autocomplete="current-password"
+             pattern="[0-9]*" maxlength="8" placeholder="••••" required>
+    </label>
+    <p class="login-error" id="loginError" role="alert" hidden></p>
+    <button type="submit" class="btn btn-gold btn-block">Sign in</button>
+    <p class="login-hint" id="demoPinHint" hidden>
+      Demo profiles: <strong>0712 345 678</strong> (Amina), <strong>0723 456 789</strong> (John),
+      <strong>0734 567 890</strong> (Mary) — PIN <strong>1234</strong>.
+    </p>
+  </form>
+</div>
+
+<div class="app" id="app" hidden>
 
   <!-- ===================== SIDEBAR ===================== -->
   <aside class="sidebar">
@@ -25,41 +58,42 @@
     </div>
 
     <div class="profile-select-wrap">
+      <label class="sr-only" for="profileSwitcher">Active farmer profile</label>
       <select id="profileSwitcher" class="profile-select">
-        <option value="">Loading profiles...</option>
+        <option value="">Loading profiles…</option>
       </select>
     </div>
 
-    <nav class="nav">
-      <button class="nav-item active" data-view="dashboard">
-        <svg viewBox="0 0 24 24"><path d="M3 12l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>
+    <nav class="nav" aria-label="Main">
+      <button type="button" class="nav-item active" data-view="dashboard" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>
         Dashboard
       </button>
-      <button class="nav-item" data-view="doctor">
-        <svg viewBox="0 0 24 24"><path d="M12 2C8 6 4 8 4 13a8 8 0 0 0 16 0c0-5-4-7-8-11zm0 17a5 5 0 0 1-5-5h2a3 3 0 0 0 3 3z"/></svg>
+      <button type="button" class="nav-item" data-view="doctor">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C8 6 4 8 4 13a8 8 0 0 0 16 0c0-5-4-7-8-11zm0 17a5 5 0 0 1-5-5h2a3 3 0 0 0 3 3z"/></svg>
         Crop Doctor
       </button>
-      <button class="nav-item" data-view="markets">
-        <svg viewBox="0 0 24 24"><path d="M3 20h18v2H3zM5 18h3v-7H5zm5.5 0h3V6h-3zm5.5 0h3v-4h-3z"/></svg>
+      <button type="button" class="nav-item" data-view="markets">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18v2H3zM5 18h3v-7H5zm5.5 0h3V6h-3zm5.5 0h3v-4h-3z"/></svg>
         Markets
       </button>
-      <button class="nav-item" data-view="harvests">
-        <svg viewBox="0 0 24 24"><path d="M4 10h16l-1.5 10a2 2 0 0 1-2 1.7h-9A2 2 0 0 1 5.5 20zM12 2a5 5 0 0 1 5 5v1H7V7a5 5 0 0 1 5-5zm0 2a3 3 0 0 0-3 3v1h6V7a3 3 0 0 0-3-3z"/></svg>
+      <button type="button" class="nav-item" data-view="harvests">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16l-1.5 10a2 2 0 0 1-2 1.7h-9A2 2 0 0 1 5.5 20zM12 2a5 5 0 0 1 5 5v1H7V7a5 5 0 0 1 5-5zm0 2a3 3 0 0 0-3 3v1h6V7a3 3 0 0 0-3-3z"/></svg>
         My Harvests
       </button>
-      <button class="nav-item" data-view="credit">
-        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8zm1 4v5.6l4.8 2.8-1 1.7L11 13V6z"/></svg>
+      <button type="button" class="nav-item" data-view="credit">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8zm1 4v5.6l4.8 2.8-1 1.7L11 13V6z"/></svg>
         Mavuno Score
       </button>
     </nav>
 
-    <button class="ussd-btn" id="ussdBtn">
+    <button type="button" class="ussd-btn" id="ussdBtn" aria-label="Open the USSD feature-phone simulator">
       <span class="ussd-code">*384*626#</span>
       <span class="ussd-label">No smartphone? Dial in →</span>
     </button>
 
     <div class="sidebar-farmer" id="sidebarFarmer">
-      <div class="avatar">AC</div>
+      <div class="avatar" aria-hidden="true">🌾</div>
       <div>
         <div class="farmer-name">—</div>
         <div class="farmer-county">—</div>
@@ -91,7 +125,7 @@
           <div class="weather-strip" id="weatherStrip"></div>
         </div>
         <div class="card">
-          <div class="card-title">Today's prices <span class="muted">(avg across markets, KES/kg)</span></div>
+          <div class="card-title">Market prices <span class="muted">(avg across markets, KES/kg · <span id="pricesAsOf">—</span>)</span></div>
           <div class="ticker-list" id="tickerList"></div>
         </div>
         <div class="card span-2">
@@ -120,7 +154,7 @@
             <input type="file" id="leafInput" accept="image/*" hidden>
             <svg viewBox="0 0 24 24" class="dz-icon"><path d="M12 3l5 5h-3v6h-4V8H7zm-7 15h14v2H5z" transform="translate(2 0)"/></svg>
             <span class="dz-text">Tap to upload or drop image here</span>
-            <span class="dz-hint">Works offline · analysed on your phone</span>
+            <span class="dz-hint">Analysed on your phone · the photo never leaves your device</span>
           </label>
           <canvas id="leafCanvas" hidden></canvas>
           <div class="preview-wrap" id="previewWrap" hidden>
@@ -180,10 +214,12 @@
 
       <div class="card">
         <table class="ledger" id="ledgerTable">
+          <caption class="sr-only">Your logged harvests, newest first</caption>
           <thead><tr>
-            <th>Crop</th><th>Season</th><th>Quantity</th><th>Sold @</th><th>Market</th><th>Date</th><th>Revenue</th>
+            <th scope="col">Crop</th><th scope="col">Season</th><th scope="col">Quantity</th>
+            <th scope="col">Sold @</th><th scope="col">Market</th><th scope="col">Date</th><th scope="col">Revenue</th>
           </tr></thead>
-          <tbody></tbody>
+          <tbody aria-busy="false"></tbody>
         </table>
       </div>
     </section>
@@ -221,8 +257,8 @@
 
 <!-- ============ ADD HARVEST MODAL ============ -->
 <div class="modal-backdrop" id="harvestModal" hidden>
-  <div class="modal">
-    <h2 class="modal-title">Log a harvest</h2>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="harvestModalTitle">
+    <h2 class="modal-title" id="harvestModalTitle">Log a harvest</h2>
     <form id="harvestForm">
       <div class="form-row">
         <label>Crop
@@ -262,18 +298,19 @@
 
 <!-- ============ USSD SIMULATOR ============ -->
 <div class="modal-backdrop" id="ussdModal" hidden>
-  <div class="phone">
+  <div class="phone" role="dialog" aria-modal="true" aria-label="USSD feature-phone simulator">
     <div class="phone-notch"></div>
-    <div class="phone-screen" id="ussdScreen"></div>
+    <div class="phone-screen" id="ussdScreen" role="status" aria-live="polite"></div>
     <div class="phone-input">
-      <input id="ussdInput" placeholder="Reply…" autocomplete="off">
-      <button class="btn btn-gold" id="ussdSend">Send</button>
+      <label class="sr-only" for="ussdInput">USSD reply</label>
+      <input id="ussdInput" placeholder="Reply…" autocomplete="off" inputmode="numeric">
+      <button type="button" class="btn btn-gold" id="ussdSend">Send</button>
     </div>
-    <button class="phone-close" id="ussdClose">End session</button>
+    <button type="button" class="phone-close" id="ussdClose">End session</button>
   </div>
 </div>
 
-<div class="toast" id="toast" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="/js/app.js"></script>
 </body>

@@ -1,0 +1,20 @@
+{
+  "name": "MavunoAI — harvest intelligence & agri-credit",
+  "short_name": "MavunoAI",
+  "description": "Turning harvests into credit history. Crop diagnosis, market prices and the Mavuno Score for Kenyan smallholder farmers.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0d1c12",
+  "theme_color": "#122619",
+  "lang": "en-KE",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
