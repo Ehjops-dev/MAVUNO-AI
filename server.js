@@ -9,6 +9,26 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
+function loadEnvFile() {
+  const envPath = path.join(__dirname, '.env');
+  if (!fs.existsSync(envPath)) return;
+  const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (key && process.env[key] === undefined) process.env[key] = value;
+  }
+}
+
+loadEnvFile();
+
 const PORT = process.env.PORT || 4500;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const db = new DatabaseSync(process.env.MAVUNO_DB || path.join(__dirname, 'mavuno.db'));
@@ -54,6 +74,22 @@ db.exec(`
     status TEXT DEFAULT 'approved',
     score_at_application INTEGER,
     created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS payment_transactions (
+    id TEXT PRIMARY KEY,
+    loan_id TEXT,
+    farmer_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    external_reference TEXT NOT NULL,
+    phone_number TEXT,
+    amount REAL NOT NULL,
+    status TEXT NOT NULL,
+    merchant_reference TEXT,
+    checkout_request_id TEXT,
+    conversation_id TEXT,
+    response_payload TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
   );
   CREATE TABLE IF NOT EXISTS prices (
     crop TEXT NOT NULL,
@@ -278,6 +314,107 @@ function readBody(req) {
   });
 }
 
+function normalizeKenyanPhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('254') && digits.length === 12) return digits;
+  if (digits.startsWith('0') && digits.length === 10) return '254' + digits.slice(1);
+  if (digits.startsWith('7') && digits.length === 9) return '254' + digits;
+  return digits;
+}
+
+function getPayHeroAuthHeader() {
+  if (process.env.PAYHERO_BASIC_AUTH) return 'Basic ' + process.env.PAYHERO_BASIC_AUTH;
+  if (process.env.PAYHERO_USERNAME && process.env.PAYHERO_PASSWORD) {
+    return 'Basic ' + Buffer.from(`${process.env.PAYHERO_USERNAME}:${process.env.PAYHERO_PASSWORD}`).toString('base64');
+  }
+  return '';
+}
+
+function getPayHeroConfigStatus() {
+  const hasAuth = Boolean(getPayHeroAuthHeader());
+  const hasChannel = Boolean(process.env.PAYHERO_CHANNEL_ID);
+  return {
+    mode: hasAuth && hasChannel ? 'live' : 'demo',
+    has_auth: hasAuth,
+    has_channel_id: hasChannel,
+    has_callback_url: Boolean(process.env.PAYHERO_CALLBACK_URL || process.env.PUBLIC_URL),
+    callback_url: process.env.PAYHERO_CALLBACK_URL ||
+      (process.env.PUBLIC_URL ? `${String(process.env.PUBLIC_URL).replace(/\/$/, '')}/api/payhero/callback` : null),
+  };
+}
+
+async function initiatePayHeroDisbursement({ farmerId, loanId, amount, phoneNumber }) {
+  const externalReference = `MAV-${loanId.slice(0, 8).toUpperCase()}`;
+  const channelId = process.env.PAYHERO_CHANNEL_ID;
+  const authHeader = getPayHeroAuthHeader();
+  const callbackUrl = process.env.PAYHERO_CALLBACK_URL ||
+    (process.env.PUBLIC_URL ? `${String(process.env.PUBLIC_URL).replace(/\/$/, '')}/api/payhero/callback` : '');
+
+  const baseTransaction = {
+    id: crypto.randomUUID(),
+    loan_id: loanId,
+    farmer_id: farmerId,
+    provider: 'payhero',
+    external_reference: externalReference,
+    phone_number: phoneNumber,
+    amount,
+  };
+
+  if (!authHeader || !channelId) {
+    const demoPayload = {
+      mode: 'demo',
+      status: 'QUEUED',
+      merchant_reference: 'DEMO-' + externalReference,
+      checkout_request_id: crypto.randomUUID(),
+      conversation_id: crypto.randomUUID(),
+      message: 'PayHero credentials not configured; simulated M-PESA disbursement for demo.',
+    };
+    db.prepare(`INSERT INTO payment_transactions
+      (id, loan_id, farmer_id, provider, external_reference, phone_number, amount, status,
+       merchant_reference, checkout_request_id, conversation_id, response_payload)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(baseTransaction.id, loanId, farmerId, 'payhero-demo', externalReference, phoneNumber, amount, 'queued',
+        demoPayload.merchant_reference, demoPayload.checkout_request_id, demoPayload.conversation_id, JSON.stringify(demoPayload));
+    return { ...demoPayload, transaction_id: baseTransaction.id };
+  }
+
+  const payload = {
+    external_reference: externalReference,
+    amount: Math.round(amount),
+    phone_number: phoneNumber,
+    network_code: '63902',
+    callback_url: callbackUrl,
+    channel: 'mobile',
+    channel_id: Number(channelId),
+    payment_service: 'b2c',
+  };
+
+  const response = await fetch('https://backend.payhero.co.ke/api/v2/withdraw', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({ raw: 'Non-JSON PayHero response' }));
+  const queued = response.ok && String(data.status || '').toUpperCase() !== 'FAILED';
+
+  db.prepare(`INSERT INTO payment_transactions
+    (id, loan_id, farmer_id, provider, external_reference, phone_number, amount, status,
+     merchant_reference, checkout_request_id, conversation_id, response_payload)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(baseTransaction.id, loanId, farmerId, 'payhero', externalReference, phoneNumber, amount,
+      queued ? 'queued' : 'failed', data.merchant_reference || null, data.checkout_request_id || null,
+      data.conversation_id || null, JSON.stringify(data));
+
+  if (!queued) {
+    const err = new Error(data.error || data.message || 'PayHero disbursement failed');
+    err.statusCode = response.status >= 400 ? response.status : 502;
+    err.payhero = data;
+    throw err;
+  }
+
+  return { ...data, transaction_id: baseTransaction.id };
+}
+
 const MIME = {
   '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
@@ -287,6 +424,10 @@ const MIME = {
 /* ---------------------------------------------------------------- routes */
 async function handleApi(req, res, url) {
   const farmerId = req.headers['x-farmer-id'] || DEMO_FARMER_ID;
+
+  if (req.method === 'GET' && url.pathname === '/api/payhero/config') {
+    return json(res, 200, getPayHeroConfigStatus());
+  }
 
   if (req.method === 'GET' && url.pathname === '/api/farmers') {
     return json(res, 200, db.prepare('SELECT * FROM farmers ORDER BY name').all());
@@ -382,11 +523,30 @@ async function handleApi(req, res, url) {
     const s = computeScore(farmerId);
     const offer = s.offers.find(o => o.name === b.offer);
     if (!offer) return json(res, 403, { error: 'Not eligible for this offer' });
+    const farmer = db.prepare('SELECT phone FROM farmers WHERE id = ?').get(farmerId);
+    const phoneNumber = normalizeKenyanPhone(b.phone || farmer?.phone);
+    if (!/^2547\d{8}$/.test(phoneNumber)) {
+      return json(res, 400, { error: 'Valid Kenyan M-PESA phone number is required' });
+    }
     const id = crypto.randomUUID();
     db.prepare(`INSERT INTO loans (id, farmer_id, amount, rate_pct_month, term_months, purpose, score_at_application)
                 VALUES (?,?,?,?,?,?,?)`)
       .run(id, farmerId, offer.amount, offer.rate, offer.term, offer.name, s.score);
-    return json(res, 201, { id, ...offer, status: 'approved' });
+    try {
+      const disbursement = await initiatePayHeroDisbursement({
+        farmerId,
+        loanId: id,
+        amount: offer.amount,
+        phoneNumber,
+      });
+      return json(res, 201, { id, ...offer, status: 'approved', disbursement });
+    } catch (err) {
+      db.prepare('UPDATE loans SET status = ? WHERE id = ?').run('disbursement_failed', id);
+      return json(res, err.statusCode || 502, {
+        error: err.message || 'PayHero disbursement failed',
+        payhero: err.payhero || null,
+      });
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/loans/repay') {
@@ -401,7 +561,40 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/loans') {
-    return json(res, 200, db.prepare('SELECT * FROM loans WHERE farmer_id = ? ORDER BY created_at DESC').all(farmerId));
+    return json(res, 200, db.prepare(`
+      SELECT l.*,
+             pt.provider AS payment_provider,
+             pt.status AS payment_status,
+             pt.external_reference AS payment_reference,
+             pt.merchant_reference,
+             pt.checkout_request_id,
+             pt.phone_number AS payment_phone,
+             pt.created_at AS payment_created_at
+      FROM loans l
+      LEFT JOIN payment_transactions pt ON pt.id = (
+        SELECT id FROM payment_transactions
+        WHERE loan_id = l.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      WHERE l.farmer_id = ?
+      ORDER BY l.created_at DESC
+    `).all(farmerId));
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/payhero/callback') {
+    const b = await readBody(req);
+    const response = b.response || b;
+    const externalRef = response.ExternalReference || response.external_reference || b.external_reference;
+    const status = String(response.Status || b.status || '').toLowerCase();
+    const mapped = status === 'success' || response.ResultCode === 0 ? 'success' : status || 'callback_received';
+    if (externalRef) {
+      db.prepare(`UPDATE payment_transactions
+        SET status = ?, response_payload = ?, updated_at = datetime('now')
+        WHERE external_reference = ?`)
+        .run(mapped, JSON.stringify(b), externalRef);
+    }
+    return json(res, 200, { received: true });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/diagnoses') {

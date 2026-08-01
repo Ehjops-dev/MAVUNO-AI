@@ -36,6 +36,30 @@ node server.js
 
 No `npm install`, no API keys, no internet required.
 
+## Live PayHero setup
+
+The app loads `.env` automatically on startup.
+
+```bash
+cp .env.example .env
+```
+
+Then fill either `PAYHERO_BASIC_AUTH` or `PAYHERO_USERNAME` + `PAYHERO_PASSWORD`, plus `PAYHERO_CHANNEL_ID`.
+
+```bash
+PAYHERO_BASIC_AUTH=your_rotated_basic_token_without_the_basic_prefix
+PAYHERO_CHANNEL_ID=your_payment_wallet_channel_id
+PAYHERO_CALLBACK_URL=https://your-public-domain.com/api/payhero/callback
+```
+
+Check config without exposing secrets:
+
+```bash
+curl http://localhost:4501/api/payhero/config
+```
+
+Expected live result includes `"mode":"live"`. If it says `"mode":"demo"`, the app will not send real money.
+
 ## Architecture
 
 ```
@@ -48,6 +72,7 @@ No `npm install`, no API keys, no internet required.
 ```
 
 - **Mavuno Score engine** (`server.js → computeScore`): weighted 5-factor model over the harvest ledger, mapped to a 300–850 band with loan tiers.
+- **PayHero disbursement demo** (`POST /api/loans`): approving a loan creates a PayHero M-PESA mobile disbursement record. Without credentials it runs in demo mode and shows a queued transaction reference; with credentials set `PAYHERO_USERNAME`, `PAYHERO_PASSWORD`, `PAYHERO_CHANNEL_ID`, and optionally `PAYHERO_CALLBACK_URL`.
 - **Crop Doctor** (`app.js → extractLeafFeatures`): canvas-based colour-signature extraction (chlorosis / necrosis / lesion ratios) matched against a knowledge base of 14 common Kenyan crop diseases with localised treatment advice. Designed to swap in a TensorFlow Lite CNN without changing the UX.
 - **Price feed**: seeded 60-day series per crop per market; the API shape is ready for a live ingest (e.g. KAMIS / county market boards).
 - **Weather**: simulated 5-day feed; swap `generateWeather()` for OpenWeather with one function change.

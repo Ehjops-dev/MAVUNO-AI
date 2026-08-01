@@ -258,11 +258,25 @@ body::before { /* grain */
 .offer .o-amount { font-family: var(--serif); font-size: 28px; font-weight: 700; color: var(--gold); }
 .offer .o-terms { font-size: 12.5px; color: var(--cream-dim); margin: 6px 0 12px; }
 .offer .o-desc { font-size: 13px; margin-bottom: 14px; line-height: 1.45; }
+.payhero-note {
+  display: inline-flex; align-items: center; margin-bottom: 14px; padding: 6px 9px;
+  border-radius: 8px; background: rgba(76,191,107,.1); color: var(--green);
+  font-size: 11.5px; font-weight: 700;
+}
 .no-offers { color: var(--cream-dim); font-size: 14px; padding: 10px 0; }
 
 .loan-list { display: flex; flex-direction: column; gap: 8px; }
-.loan-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-radius: 11px; background: rgba(242,236,217,.035); font-size: 13.5px; }
+.loan-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 11px; background: rgba(242,236,217,.035); font-size: 13.5px; }
+.loan-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.payment-meta { color: var(--cream-dim); font-size: 11.5px; word-break: break-word; }
+.loan-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .loan-status { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; padding: 3px 10px; border-radius: 999px; color: var(--green); background: var(--green-soft); }
+.payment-status {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+  padding: 3px 10px; border-radius: 999px; color: var(--gold); background: var(--gold-soft);
+}
+.payment-status.success { color: var(--green); background: var(--green-soft); }
+.payment-status.failed { color: var(--red); background: var(--red-soft); }
 
 /* ---------------- buttons / forms ---------------- */
 .btn {
@@ -384,6 +398,8 @@ body::before { /* grain */
   /* Modal responsive improvements */
   .modal { padding: 20px 24px; width: 95vw; }
   .form-row { grid-template-columns: 1fr; gap: 12px; }
+  .loan-row { align-items: flex-start; flex-direction: column; }
+  .loan-actions { justify-content: flex-start; }
   
   /* USSD Phone overlay alignment */
   .phone { transform: scale(0.9); }

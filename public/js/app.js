@@ -6,6 +6,12 @@
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const KES = n => 'KES ' + Math.round(n).toLocaleString('en-KE');
+const paymentStatusLabel = s => ({
+  success: 'paid',
+  queued: 'queued',
+  failed: 'failed',
+  callback_received: 'updated',
+})[s] || s || 'pending';
 
 /* ------------------------------------------------ knowledge base */
 /* Symptom-signature model: each disease carries a visual signature
@@ -505,28 +511,41 @@ async function loadCredit() {
           <div class="o-amount">${KES(o.amount)}</div>
           <div class="o-terms">${o.rate}% per month · ${o.term} months · no collateral</div>
           <div class="o-desc">${o.desc}</div>
-          <button class="btn btn-gold" data-offer="${o.name}">Apply in one tap</button>
+          <div class="payhero-note">PayHero M-PESA disbursement to your registered phone</div>
+          <button class="btn btn-gold" data-offer="${o.name}">Apply & disburse</button>
         </div>`).join('')
     : `<div class="no-offers">Log more harvests to unlock loan offers — every season you record raises your score.</div>`;
 
   $$('#loanOffers [data-offer]').forEach(btn => btn.addEventListener('click', async () => {
+    btn.textContent = 'Sending to PayHero…';
+    btn.disabled = true;
     const res = await fetch('/api/loans', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ offer: btn.dataset.offer }),
     });
     if (res.ok) {
       const loan = await res.json();
-      toast(`✅ ${KES(loan.amount)} approved — disbursing to M-PESA`);
+      const mode = loan.disbursement?.mode === 'demo' ? 'demo queued' : 'queued';
+      toast(`${KES(loan.amount)} approved — PayHero ${mode} to M-PESA`);
       loadCredit();
-    } else toast('Not eligible for this offer yet');
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast(err.error || 'PayHero disbursement failed');
+      btn.textContent = 'Apply & disburse';
+      btn.disabled = false;
+    }
   }));
 
   const loans = await fetch('/api/loans').then(r => r.json());
   $('#loanList').innerHTML = loans.length
     ? loans.map(l => `
-        <div class="loan-row" style="display:flex;justify-content:space-between;align-items:center;width:100%;">
-          <span><strong>${l.purpose}</strong> · ${KES(l.amount)} · ${l.rate_pct_month}%/mo × ${l.term_months} mo</span>
-          <div style="display:flex;gap:8px;align-items:center;">
+        <div class="loan-row">
+          <div class="loan-main">
+            <span><strong>${l.purpose}</strong> · ${KES(l.amount)} · ${l.rate_pct_month}%/mo × ${l.term_months} mo</span>
+            ${l.payment_reference ? `<span class="payment-meta">PayHero ${paymentStatusLabel(l.payment_status)} · ${l.payment_reference} · ${l.payment_phone}</span>` : ''}
+          </div>
+          <div class="loan-actions">
+            ${l.payment_status ? `<span class="payment-status ${l.payment_status}">PayHero ${paymentStatusLabel(l.payment_status)}</span>` : ''}
             <span class="loan-status" style="background:${l.status === 'repaid' ? 'var(--green-soft)' : 'var(--gold-soft)'};color:${l.status === 'repaid' ? 'var(--green)' : 'var(--gold)'}">${l.status}</span>
             ${l.status === 'approved' ? `<button class="btn btn-gold btn-repay" data-id="${l.id}" style="padding:4px 10px;font-size:11.5px;border-radius:6px;">Repay</button>` : ''}
           </div>
