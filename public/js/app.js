@@ -6,6 +6,12 @@
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const KES = n => 'KES ' + Math.round(n).toLocaleString('en-KE');
+
+/* Every value that reaches innerHTML goes through esc(). Disease names,
+   markets, seasons and farmer names all originate from user input at some
+   point, and unescaped they are a stored-XSS route. */
+const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ESCAPES[c]);
 const paymentStatusLabel = s => ({
   success: 'paid',
   queued: 'queued',
@@ -96,31 +102,64 @@ const DISEASE_KB = {
 };
 
 const CROPS = Object.keys(DISEASE_KB);
-var state = {
+const state = {
   doctorCrop: 'maize',
   marketCrop: 'maize',
   leafImage: null,
-  selectedFarmerId: localStorage.getItem('mavuno_farmer_id') || ''
+  selectedFarmerId: localStorage.getItem('mavuno_farmer_id') || '',
+  token: sessionStorage.getItem('mavuno_token') || '',
+  demoMode: true,
 };
 
-// Dynamic profile header interceptor (defined after state initialization to avoid TDZ ReferenceErrors)
-const originalFetch = window.fetch;
-window.fetch = function (url, options = {}) {
-  if (state && state.selectedFarmerId) {
-    options.headers = options.headers || {};
-    if (options.headers instanceof Headers) {
-      options.headers.set('X-Farmer-Id', state.selectedFarmerId);
-    } else if (typeof options.headers === 'object') {
-      options.headers['X-Farmer-Id'] = state.selectedFarmerId;
-    }
+/* ------------------------------------------------ api client */
+/* Identity now travels as a signed Bearer token the server issued, not as a
+   client-asserted farmer id. api() attaches it, surfaces a real Error on
+   failure so callers can show something useful, and bounces to the login
+   screen when the session expires. */
+class ApiError extends Error {
+  constructor(status, message, body) { super(message); this.status = status; this.body = body; }
+}
+
+async function api(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (state.token) headers.Authorization = 'Bearer ' + state.token;
+  if (options.body) headers['Content-Type'] = 'application/json';
+
+  let res;
+  try {
+    res = await fetch(path, { ...options, headers });
+  } catch {
+    throw new ApiError(0, 'No connection to the MavunoAI server');
   }
-  return originalFetch(url, options);
-};
+
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    clearSession();
+    showLogin('Your session expired — sign in again.');
+    throw new ApiError(401, body.error || 'Sign in to continue', body);
+  }
+  if (!res.ok) throw new ApiError(res.status, body.error || `Request failed (${res.status})`, body);
+  return body;
+}
+
+function setSession(token, farmerId) {
+  state.token = token;
+  state.selectedFarmerId = farmerId;
+  // sessionStorage, not localStorage: the token dies with the tab.
+  sessionStorage.setItem('mavuno_token', token);
+  localStorage.setItem('mavuno_farmer_id', farmerId);
+}
+
+function clearSession() {
+  state.token = '';
+  sessionStorage.removeItem('mavuno_token');
+}
 
 /* ------------------------------------------------ navigation */
 $$('.nav-item').forEach(btn => btn.addEventListener('click', () => {
-  $$('.nav-item').forEach(b => b.classList.remove('active'));
+  $$('.nav-item').forEach(b => { b.classList.remove('active'); b.removeAttribute('aria-current'); });
   btn.classList.add('active');
+  btn.setAttribute('aria-current', 'page');
   $$('.view').forEach(v => v.classList.remove('active'));
   $('#view-' + btn.dataset.view).classList.add('active');
   if (btn.dataset.view === 'markets') loadMarkets(state.marketCrop);
@@ -141,8 +180,33 @@ function toast(msg) {
 const WEATHER_EMOJI = { sun: '☀️', 'sun-cloud': '⛅', cloud: '☁️', rain: '🌧️', storm: '⛈️' };
 const ADVICE_EMOJI = { leaf: '🌿', shield: '🛡️', seed: '🌱', store: '🏪', rain: '🌧️' };
 
+/* Renders an inline retry panel instead of leaving a half-drawn view with a
+   console error, which is what every fetch here used to do on failure. */
+function renderError(selector, err, retry) {
+  const el = $(selector);
+  if (!el) return;
+  el.innerHTML = `<div class="load-error" role="alert">
+      <span>${esc(err.message)}</span>
+      <button class="btn btn-ghost btn-retry" type="button">Retry</button>
+    </div>`;
+  $('.btn-retry', el).addEventListener('click', retry);
+}
+
+const setBusy = (selector, on) => $(selector)?.setAttribute('aria-busy', on ? 'true' : 'false');
+
 async function loadDashboard() {
-  const d = await fetch('/api/dashboard').then(r => r.json());
+  setBusy('#statRow', true);
+  let d;
+  try {
+    d = await api('/api/dashboard');
+  } catch (err) {
+    if (err.status !== 401) renderError('#statRow', err, loadDashboard);
+    return;
+  } finally {
+    setBusy('#statRow', false);
+  }
+
+  state.farmer = d.farmer;
 
   const hour = new Date().getHours();
   $('#greeting').textContent =
@@ -159,38 +223,52 @@ async function loadDashboard() {
     <div class="stat"><div class="stat-num">${d.harvestCount}</div><div class="stat-label">Harvests logged</div></div>
     <div class="stat"><div class="stat-num">${(d.totalKg / 1000).toFixed(1)}<small> t</small></div><div class="stat-label">Total produce</div></div>
     <div class="stat"><div class="stat-num">${Math.round(d.totalRevenue / 1000)}<small>K KES</small></div><div class="stat-label">Lifetime revenue</div></div>
-    <div class="stat"><div class="stat-num" style="color:var(--gold)">${d.tier}</div><div class="stat-label">Credit tier</div></div>`;
+    <div class="stat"><div class="stat-num" style="color:var(--gold)">${esc(d.tier)}</div><div class="stat-label">Credit tier</div></div>`;
 
   $('#weatherStrip').innerHTML = d.weather.map(w => `
     <div class="weather-day">
-      <div class="wd-name">${w.day}</div>
-      <div class="wd-icon">${WEATHER_EMOJI[w.icon]}</div>
+      <div class="wd-name">${esc(w.day)}</div>
+      <div class="wd-icon" role="img" aria-label="${esc(w.label)}">${WEATHER_EMOJI[w.icon] || '🌤️'}</div>
       <div class="wd-temp">${w.high}° <span>/ ${w.low}°</span></div>
       <div class="wd-rain">${w.rain_mm ? w.rain_mm + ' mm' : ''}</div>
     </div>`).join('');
 
   $('#tickerList').innerHTML = d.prices.map(p => `
     <div class="ticker">
-      <span class="t-crop">${p.crop}</span>
+      <span class="t-crop">${esc(p.crop)}</span>
       <span class="t-price">${p.price.toFixed(1)}</span>
       <span class="badge ${p.change_pct >= 0 ? 'up' : 'down'}">${p.change_pct >= 0 ? '▲' : '▼'} ${Math.abs(p.change_pct)}%</span>
     </div>`).join('');
 
+  // Say which day the prices are from rather than implying they are always today's.
+  const asOf = $('#pricesAsOf');
+  if (asOf && d.prices_as_of) {
+    const fresh = d.prices_as_of === new Date().toISOString().slice(0, 10);
+    asOf.textContent = fresh
+      ? 'updated today'
+      : 'as of ' + new Date(d.prices_as_of + 'T00:00:00Z').toLocaleDateString('en-KE', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  }
+
   $('#adviceGrid').innerHTML = d.advisory.map(a => `
     <div class="advice">
-      <div class="a-icon">${ADVICE_EMOJI[a.icon] || '🌾'}</div>
-      <div class="a-title">${a.title}</div>
-      <div class="a-body">${a.body}</div>
+      <div class="a-icon" aria-hidden="true">${ADVICE_EMOJI[a.icon] || '🌾'}</div>
+      <div class="a-title">${esc(a.title)}</div>
+      <div class="a-body">${esc(a.body)}</div>
     </div>`).join('');
 }
 
 /* ------------------------------------------------ crop doctor */
 function renderCropPills(containerId, onPick, activeCrop) {
   $('#' + containerId).innerHTML = CROPS.map(c =>
-    `<button class="pill ${c === activeCrop ? 'active' : ''}" data-crop="${c}">${c}</button>`).join('');
+    `<button type="button" class="pill ${c === activeCrop ? 'active' : ''}" data-crop="${esc(c)}"
+             aria-pressed="${c === activeCrop}">${esc(c)}</button>`).join('');
   $$('#' + containerId + ' .pill').forEach(p => p.addEventListener('click', () => {
-    $$('#' + containerId + ' .pill').forEach(x => x.classList.remove('active'));
+    $$('#' + containerId + ' .pill').forEach(x => {
+      x.classList.remove('active');
+      x.setAttribute('aria-pressed', 'false');
+    });
     p.classList.add('active');
+    p.setAttribute('aria-pressed', 'true');
     onPick(p.dataset.crop);
   }));
 }
@@ -229,10 +307,21 @@ $('#analyzeBtn').addEventListener('click', async () => {
   renderDiagnosis(result);
   btn.textContent = 'Diagnose now';
   btn.disabled = false;
-  fetch('/api/diagnoses', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ crop: state.doctorCrop, disease: result.disease.name, confidence: result.confidence, severity: result.disease.severity }),
-  }).then(loadScanHistory);
+
+  // An unrecognised image is not a finding — don't write it to the farm record.
+  if (!result.recognised) return;
+  try {
+    await api('/api/diagnoses', {
+      method: 'POST',
+      body: JSON.stringify({
+        crop: state.doctorCrop, disease: result.disease.name,
+        confidence: result.confidence, severity: result.disease.severity,
+      }),
+    });
+    loadScanHistory();
+  } catch (err) {
+    if (err.status !== 401) toast('Scan saved locally but not to your record: ' + err.message);
+  }
 });
 
 /* Colour-signature feature extraction: samples the photo and measures
@@ -256,13 +345,27 @@ function extractLeafFeatures(img) {
     else if (r > 120 && g > 95 && b < g * 0.75 && r >= g) yellow++;
     else if (r > g && g >= b && r < 160) brown++;
   }
-  if (!total) return { chlorosis: 0, necrosis: 0, spotting: 0 };
+  if (!total) return { chlorosis: 0, necrosis: 0, spotting: 0, tissue: 0 };
   return {
     chlorosis: yellow / total,
     necrosis: brown / total,
     spotting: dark / total,
+    // Share of the frame that looks like plant tissue at all — green, yellow,
+    // browned or lesioned. A photo of a shoe or the sky matches none of those
+    // buckets, so tissue lands near zero. Without this, an image with no
+    // damage signal is indistinguishable from a perfectly healthy leaf.
+    tissue: (green + yellow + brown + dark) / total,
   };
 }
+
+/* Beyond this signature distance the photo does not resemble any leaf in the
+   knowledge base. The old code floored confidence at 58%, so a photo of a
+   shoe came back as a confident diagnosis — the single most damaging thing
+   a judge could stumble into. */
+const MAX_SIGNATURE_DISTANCE = 0.42;
+/* At least this much of the frame must read as plant tissue before we are
+   willing to name a disease. */
+const MIN_TISSUE_COVERAGE = 0.35;
 
 function rankDiseases(crop, f) {
   const kb = DISEASE_KB[crop];
@@ -271,21 +374,47 @@ function rankDiseases(crop, f) {
     const dist = Math.hypot(f.chlorosis - d.sig.chlorosis, f.necrosis - d.sig.necrosis, f.spotting - d.sig.spotting);
     if (dist < bestDist) { bestDist = dist; best = d; }
   }
-  const confidence = Math.round(Math.max(58, Math.min(96, (1 - bestDist) * 100)));
-  return { disease: best, confidence, features: f };
+  // Two independent gates: the frame must look like a leaf, and its damage
+  // signature must actually be close to something in the knowledge base.
+  const recognised = f.tissue >= MIN_TISSUE_COVERAGE && bestDist <= MAX_SIGNATURE_DISTANCE;
+  const confidence = Math.round(Math.max(40, Math.min(96, (1 - bestDist) * 100)));
+  return { disease: best, confidence, features: f, recognised, distance: bestDist };
 }
 
-function renderDiagnosis({ disease, confidence, features }) {
+function renderUnrecognised(features) {
+  $('#doctorEmpty').style.display = 'none';
+  const card = $('#diagnosisCard');
+  card.hidden = false;
+  card.innerHTML = `
+    <div class="diag-head">
+      <div class="diag-name">🔍 Not recognised as a crop leaf</div>
+      <span class="sev unknown">no diagnosis</span>
+    </div>
+    <div class="diag-sci">The colour signature of this image does not match any leaf in the knowledge base.</div>
+    <div class="diag-section"><h4>Try again</h4>
+      <ul>
+        <li>Fill the frame with a single leaf, front-lit and in focus</li>
+        <li>Avoid deep shadow, flash glare and busy backgrounds</li>
+        <li>Check you picked the right crop above</li>
+      </ul></div>
+    <div class="diag-section"><h4>What the scan saw</h4>
+      <p>Only ${(features.tissue * 100).toFixed(0)}% of the frame reads as plant tissue
+         (yellowing ${(features.chlorosis * 100).toFixed(0)}% · browning ${(features.necrosis * 100).toFixed(0)}% ·
+         dark lesions ${(features.spotting * 100).toFixed(0)}%).</p></div>`;
+}
+
+function renderDiagnosis({ disease, confidence, features, recognised }) {
+  if (!recognised) return renderUnrecognised(features);
   $('#doctorEmpty').style.display = 'none';
   const card = $('#diagnosisCard');
   const healthy = disease.severity === 'none';
   card.hidden = false;
   card.innerHTML = `
     <div class="diag-head">
-      <div class="diag-name ${healthy ? 'healthy' : ''}">${healthy ? '✓ ' : '⚠ '}${disease.name}</div>
-      <span class="sev ${disease.severity}">${healthy ? 'healthy' : disease.severity + ' risk'}</span>
+      <div class="diag-name ${healthy ? 'healthy' : ''}">${healthy ? '✓ ' : '⚠ '}${esc(disease.name)}</div>
+      <span class="sev ${esc(disease.severity)}">${healthy ? 'healthy' : esc(disease.severity) + ' risk'}</span>
     </div>
-    <div class="diag-sci">${disease.sci}</div>
+    <div class="diag-sci">${esc(disease.sci)}</div>
     <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--cream-dim)">
       <span>Model confidence</span><span>${confidence}%</span>
     </div>
@@ -299,22 +428,28 @@ function renderDiagnosis({ disease, confidence, features }) {
         ${(1 - features.chlorosis - features.necrosis - features.spotting) > 0.01 ? `<div style="width:${((1 - features.chlorosis - features.necrosis - features.spotting) * 100).toFixed(0)}%;background:var(--green);" title="Healthy green"></div>` : ''}
       </div>
     </div>
-    <div class="diag-section"><h4>Typical symptoms</h4><p>${disease.symptoms}</p></div>
+    <div class="diag-section"><h4>Typical symptoms</h4><p>${esc(disease.symptoms)}</p></div>
     <div class="diag-section"><h4>${healthy ? 'Keep it that way' : 'Act now'}</h4>
-      <ul>${disease.treatment.map(t => `<li>${t}</li>`).join('')}</ul></div>
-    <div class="diag-section"><h4>Prevention</h4><p>${disease.prevention}</p></div>`;
+      <ul>${disease.treatment.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>
+    <div class="diag-section"><h4>Prevention</h4><p>${esc(disease.prevention)}</p></div>`;
   requestAnimationFrame(() => requestAnimationFrame(() => {
     $('.conf-fill', card).style.width = confidence + '%';
   }));
 }
 
 async function loadScanHistory() {
-  const rows = await fetch('/api/diagnoses').then(r => r.json());
+  let rows;
+  try {
+    rows = await api('/api/diagnoses');
+  } catch (err) {
+    if (err.status !== 401) renderError('#scanHistory', err, loadScanHistory);
+    return;
+  }
   $('#scanHistory').innerHTML = rows.length
     ? rows.map(r => `
         <div class="scan-row">
-          <span class="s-disease">${r.disease}</span>
-          <span class="s-meta">${r.crop} · ${Math.round(r.confidence)}% · ${new Date(r.created_at + 'Z').toLocaleDateString('en-KE', { day: 'numeric', month: 'short' })}</span>
+          <span class="s-disease">${esc(r.disease)}</span>
+          <span class="s-meta">${esc(r.crop)} · ${Math.round(r.confidence)}% · ${esc(new Date(r.created_at + 'Z').toLocaleDateString('en-KE', { day: 'numeric', month: 'short' }))}</span>
         </div>`).join('')
     : '<div class="scan-row"><span class="s-meta">No scans yet — your scan history builds your farm health record.</span></div>';
 }
@@ -325,12 +460,18 @@ const CHART_COLORS = ['#f0a828', '#4cbf6b', '#6fc2e8', '#e5604c', '#c9a0f5'];
 renderCropPills('marketCropPills', c => { state.marketCrop = c; loadMarkets(c); }, state.marketCrop);
 
 async function loadMarkets(crop) {
-  const d = await fetch('/api/prices?crop=' + crop).then(r => r.json());
+  let d;
+  try {
+    d = await api('/api/prices?crop=' + encodeURIComponent(crop));
+  } catch (err) {
+    if (err.status !== 401) renderError('#bestMarkets', err, () => loadMarkets(crop));
+    return;
+  }
   $('#chartCropLabel').textContent = crop;
   drawPriceChart(d.series);
   $('#bestMarkets').innerHTML = d.best.map((b, i) => `
     <div class="best-row">
-      <div><div class="b-market">${b.market}</div><div class="b-rank">${i === 0 ? '🏆 best price today' : '#' + (i + 1)}</div></div>
+      <div><div class="b-market">${esc(b.market)}</div><div class="b-rank">${i === 0 ? '🏆 best price today' : '#' + (i + 1)}</div></div>
       <div class="b-price">${b.price.toFixed(1)}<small> /kg</small></div>
     </div>`).join('');
 }
@@ -379,7 +520,7 @@ function drawPriceChart(series) {
   svg.innerHTML = out;
 
   $('#chartLegend').innerHTML = markets.map((m, i) =>
-    `<span class="legend-item"><span class="legend-dot" style="background:${CHART_COLORS[i]}"></span>${m}</span>`).join('');
+    `<span class="legend-item"><span class="legend-dot" style="background:${CHART_COLORS[i]}"></span>${esc(m)}</span>`).join('');
 
   // Wire up event listeners
   const overlay = $('.chart-overlay', svg);
@@ -426,7 +567,7 @@ function drawPriceChart(series) {
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3.5px;font-size:12px;">
             <span style="display:inline-flex;align-items:center;gap:6px;">
               <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${CHART_COLORS[mi]}"></span>
-              ${m.split(' ')[0]}
+              ${esc(m.split(' ')[0])}
             </span>
             <strong>${val} KES</strong>
           </div>`;
@@ -453,120 +594,178 @@ function drawPriceChart(series) {
 
 /* ------------------------------------------------ harvests */
 async function loadHarvests() {
-  const rows = await fetch('/api/harvests').then(r => r.json());
-  $('#ledgerTable tbody').innerHTML = rows.map(h => `
+  const body = $('#ledgerTable tbody');
+  body.setAttribute('aria-busy', 'true');
+  let rows;
+  try {
+    rows = await api('/api/harvests');
+  } catch (err) {
+    if (err.status !== 401) {
+      body.innerHTML = `<tr><td colspan="7"><div class="load-error" role="alert">
+        <span>${esc(err.message)}</span><button class="btn btn-ghost btn-retry" type="button">Retry</button></div></td></tr>`;
+      $('.btn-retry', body).addEventListener('click', loadHarvests);
+    }
+    return;
+  } finally {
+    body.setAttribute('aria-busy', 'false');
+  }
+
+  body.innerHTML = rows.length ? rows.map(h => `
     <tr>
-      <td class="crop-cell">${h.crop}</td>
-      <td>${h.season}</td>
+      <td class="crop-cell">${esc(h.crop)}</td>
+      <td>${esc(h.season)}</td>
       <td>${h.quantity_kg.toLocaleString()} kg</td>
-      <td>${h.sold_price_per_kg ? h.sold_price_per_kg + ' /kg' : '<span style="color:var(--cream-dim)">unsold</span>'}</td>
-      <td>${h.market || '—'}</td>
-      <td>${new Date(h.harvest_date).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</td>
+      <td>${h.sold_price_per_kg ? esc(h.sold_price_per_kg) + ' /kg' : '<span style="color:var(--cream-dim)">unsold</span>'}</td>
+      <td>${esc(h.market || '—')}</td>
+      <td>${esc(new Date(h.harvest_date).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }))}</td>
       <td class="rev">${h.sold_price_per_kg ? KES(h.quantity_kg * h.sold_price_per_kg) : '—'}</td>
-    </tr>`).join('');
+    </tr>`).join('')
+    : '<tr><td colspan="7" style="color:var(--cream-dim);padding:20px 0">No harvests logged yet — every bag you record builds your credit file.</td></tr>';
 }
 
-$('#addHarvestBtn').addEventListener('click', () => { $('#harvestModal').hidden = false; });
-$('#cancelHarvest').addEventListener('click', () => { $('#harvestModal').hidden = true; });
-$('#harvestModal').addEventListener('click', e => { if (e.target.id === 'harvestModal') e.target.hidden = true; });
+/* ------------------------------------------------ modals */
+/* Shared open/close so every modal traps focus, restores it on close and
+   responds to Escape — none of them did before. */
+let lastFocused = null;
+
+function openModal(id) {
+  const modal = $('#' + id);
+  lastFocused = document.activeElement;
+  modal.hidden = false;
+  const focusable = $$('button, input, select, textarea, [href]', modal).filter(el => !el.disabled);
+  focusable[0]?.focus();
+  modal._focusable = focusable;
+}
+
+function closeModal(id) {
+  const modal = $('#' + id);
+  if (modal.hidden) return;
+  modal.hidden = true;
+  lastFocused?.focus();
+}
+
+document.addEventListener('keydown', e => {
+  const modal = $$('.modal-backdrop').find(m => !m.hidden);
+  if (!modal) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeModal(modal.id); return; }
+  if (e.key !== 'Tab') return;
+  const items = (modal._focusable || []).filter(el => el.offsetParent !== null);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+
+$('#addHarvestBtn').addEventListener('click', () => openModal('harvestModal'));
+$('#cancelHarvest').addEventListener('click', () => closeModal('harvestModal'));
+$('#harvestModal').addEventListener('click', e => { if (e.target.id === 'harvestModal') closeModal('harvestModal'); });
 
 $('#harvestForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const fd = new FormData(e.target);
-  const body = Object.fromEntries(fd.entries());
-  const res = await fetch('/api/harvests', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  });
-  if (res.ok) {
-    const { score } = await res.json();
-    $('#harvestModal').hidden = true;
+  const submit = $('button[type=submit]', e.target);
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  submit.disabled = true;
+  submit.textContent = 'Saving…';
+  try {
+    const { score } = await api('/api/harvests', { method: 'POST', body: JSON.stringify(body) });
+    closeModal('harvestModal');
     e.target.reset();
     loadHarvests();
     loadDashboard();
     toast(`Harvest logged — Mavuno Score is now ${score} 🎉`);
-  } else {
-    toast('Please fill in all required fields');
+  } catch (err) {
+    // Show the server's actual complaint instead of a generic guess.
+    if (err.status !== 401) toast(err.message);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Save to ledger';
   }
 });
 
 /* ------------------------------------------------ credit */
 async function loadCredit() {
-  const s = await fetch('/api/score').then(r => r.json());
+  let s;
+  try {
+    s = await api('/api/score');
+  } catch (err) {
+    if (err.status !== 401) renderError('#scoreBreakdown', err, loadCredit);
+    return;
+  }
   drawGauge(s.score);
   $('#gaugeTier').textContent = s.tier;
 
   $('#scoreBreakdown').innerHTML = s.components.map(c => `
     <div class="bk-row">
-      <div class="bk-head"><span>${c.key} <span class="bk-hint">· ${c.hint}</span></span><strong>${c.value}/100</strong></div>
-      <div class="bk-bar"><div class="bk-fill" data-w="${c.value}"></div></div>
+      <div class="bk-head"><span>${esc(c.key)} <span class="bk-hint">· ${esc(c.hint)}</span></span><strong>${c.value}/100</strong></div>
+      <div class="bk-bar" role="meter" aria-label="${esc(c.key)}" aria-valuenow="${c.value}" aria-valuemin="0" aria-valuemax="100">
+        <div class="bk-fill" data-w="${c.value}"></div></div>
     </div>`).join('');
   requestAnimationFrame(() => requestAnimationFrame(() => {
     $$('#scoreBreakdown .bk-fill').forEach(f => (f.style.width = f.dataset.w + '%'));
   }));
 
-  $('#loanOffers').innerHTML = s.offers.length
-    ? s.offers.map(o => `
+  const loans = await api('/api/loans').catch(err => {
+    if (err.status !== 401) renderError('#loanList', err, loadCredit);
+    return null;
+  });
+  if (!loans) return;
+  const hasActiveLoan = loans.some(l => l.status === 'approved');
+
+  $('#loanOffers').innerHTML = !s.offers.length
+    ? `<div class="no-offers">Log more harvests to unlock loan offers — every season you record raises your score.</div>`
+    : s.offers.map(o => `
         <div class="offer">
-          <div class="o-name">${o.name}</div>
+          <div class="o-name">${esc(o.name)}</div>
           <div class="o-amount">${KES(o.amount)}</div>
-          <div class="o-terms">${o.rate}% per month · ${o.term} months · no collateral</div>
-          <div class="o-desc">${o.desc}</div>
+          <div class="o-terms">${esc(o.rate)}% per month · ${esc(o.term)} months · no collateral</div>
+          <div class="o-desc">${esc(o.desc)}</div>
           <div class="payhero-note">PayHero M-PESA disbursement to your registered phone</div>
-          <button class="btn btn-gold" data-offer="${o.name}">Apply & disburse</button>
-        </div>`).join('')
-    : `<div class="no-offers">Log more harvests to unlock loan offers — every season you record raises your score.</div>`;
+          <button type="button" class="btn btn-gold" data-offer="${esc(o.name)}" ${hasActiveLoan ? 'disabled' : ''}>
+            ${hasActiveLoan ? 'Repay your active loan first' : 'Apply &amp; disburse'}</button>
+        </div>`).join('');
 
   $$('#loanOffers [data-offer]').forEach(btn => btn.addEventListener('click', async () => {
     btn.textContent = 'Sending to PayHero…';
     btn.disabled = true;
-    const res = await fetch('/api/loans', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offer: btn.dataset.offer }),
-    });
-    if (res.ok) {
-      const loan = await res.json();
+    try {
+      const loan = await api('/api/loans', { method: 'POST', body: JSON.stringify({ offer: btn.dataset.offer }) });
       const mode = loan.disbursement?.mode === 'demo' ? 'demo queued' : 'queued';
       toast(`${KES(loan.amount)} approved — PayHero ${mode} to M-PESA`);
       loadCredit();
-    } else {
-      const err = await res.json().catch(() => ({}));
-      toast(err.error || 'PayHero disbursement failed');
+    } catch (err) {
+      if (err.status !== 401) toast(err.message);
       btn.textContent = 'Apply & disburse';
       btn.disabled = false;
     }
   }));
 
-  const loans = await fetch('/api/loans').then(r => r.json());
   $('#loanList').innerHTML = loans.length
     ? loans.map(l => `
         <div class="loan-row">
           <div class="loan-main">
-            <span><strong>${l.purpose}</strong> · ${KES(l.amount)} · ${l.rate_pct_month}%/mo × ${l.term_months} mo</span>
-            ${l.payment_reference ? `<span class="payment-meta">PayHero ${paymentStatusLabel(l.payment_status)} · ${l.payment_reference} · ${l.payment_phone}</span>` : ''}
+            <span><strong>${esc(l.purpose)}</strong> · ${KES(l.amount)} · ${esc(l.rate_pct_month)}%/mo × ${esc(l.term_months)} mo</span>
+            ${l.payment_reference ? `<span class="payment-meta">PayHero ${esc(paymentStatusLabel(l.payment_status))} · ${esc(l.payment_reference)} · ${esc(l.payment_phone)}</span>` : ''}
           </div>
           <div class="loan-actions">
-            ${l.payment_status ? `<span class="payment-status ${l.payment_status}">PayHero ${paymentStatusLabel(l.payment_status)}</span>` : ''}
-            <span class="loan-status" style="background:${l.status === 'repaid' ? 'var(--green-soft)' : 'var(--gold-soft)'};color:${l.status === 'repaid' ? 'var(--green)' : 'var(--gold)'}">${l.status}</span>
-            ${l.status === 'approved' ? `<button class="btn btn-gold btn-repay" data-id="${l.id}" style="padding:4px 10px;font-size:11.5px;border-radius:6px;">Repay</button>` : ''}
+            ${l.payment_status ? `<span class="payment-status ${esc(l.payment_status)}">PayHero ${esc(paymentStatusLabel(l.payment_status))}</span>` : ''}
+            <span class="loan-status" style="background:${l.status === 'repaid' ? 'var(--green-soft)' : 'var(--gold-soft)'};color:${l.status === 'repaid' ? 'var(--green)' : 'var(--gold)'}">${esc(l.status)}</span>
+            ${l.status === 'approved' ? `<button type="button" class="btn btn-gold btn-repay" data-id="${esc(l.id)}" style="padding:4px 10px;font-size:11.5px;border-radius:6px;">Repay</button>` : ''}
           </div>
         </div>`).join('')
     : '<div class="no-offers">No loans yet.</div>';
 
   $$('#loanList .btn-repay').forEach(btn => btn.addEventListener('click', async () => {
-    const loanId = btn.dataset.id;
     btn.textContent = 'Repaying…';
     btn.disabled = true;
-    const res = await fetch('/api/loans/repay', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ loanId }),
-    });
-    if (res.ok) {
-      toast('✅ Loan repaid in full! Your credit history has been updated.');
+    try {
+      const r = await api('/api/loans/repay', { method: 'POST', body: JSON.stringify({ loanId: btn.dataset.id }) });
+      toast(r.simulated
+        ? `✅ ${KES(r.amount_repaid)} repayment recorded (simulated — no funds collected)`
+        : `✅ ${KES(r.amount_repaid)} repayment sent for M-PESA confirmation`);
       loadCredit();
       loadDashboard();
-    } else {
-      toast('❌ Repayment failed');
+    } catch (err) {
+      if (err.status !== 401) toast('❌ ' + err.message);
       btn.textContent = 'Repay';
       btn.disabled = false;
     }
@@ -621,52 +820,57 @@ const ussdModal = $('#ussdModal');
 const ussdScreen = $('#ussdScreen');
 let ussdState = 'menu';
 
-const USSD_MENU = `MavunoAI  *384*626#
-Karibu Amina!
+/* The greeting used to be the literal string "Karibu Amina!", so every
+   farmer was greeted as Amina — on the last screen of the demo. */
+const ussdMenu = () => {
+  const firstName = (state.farmer?.name || '').split(' ')[0] || 'mkulima';
+  return `MavunoAI  *384*626#
+Karibu ${firstName}!
 
 1. Bei za soko (prices)
 2. Mavuno Score yangu
 3. Angalia hali ya hewa
 4. Omba mkopo (loan)
 0. Ondoka (exit)`;
+};
 
 $('#ussdBtn').addEventListener('click', async () => {
-  ussdModal.hidden = false;
+  openModal('ussdModal');
   ussdState = 'menu';
   ussdScreen.textContent = 'Connecting…';
   await new Promise(r => setTimeout(r, 600));
-  ussdScreen.textContent = USSD_MENU;
+  ussdScreen.textContent = ussdMenu();
   $('#ussdInput').focus();
 });
-$('#ussdClose').addEventListener('click', () => { ussdModal.hidden = true; });
+$('#ussdClose').addEventListener('click', () => closeModal('ussdModal'));
 
 async function ussdReply(input) {
   if (ussdState === 'menu') {
     if (input === '1') {
-      const d = await fetch('/api/dashboard').then(r => r.json());
+      const d = await api('/api/dashboard');
       return 'BEI ZA LEO (KES/kg)\n\n' +
         d.prices.map(p => `${p.crop.toUpperCase()}: ${p.price.toFixed(0)} ${p.change_pct >= 0 ? '(+' : '('}${p.change_pct}%)`).join('\n') +
         '\n\n0. Rudi (back)';
     }
     if (input === '2') {
-      const s = await fetch('/api/score').then(r => r.json());
+      const s = await api('/api/score');
       return `MAVUNO SCORE\n\nScore: ${s.score} / 850\nDaraja: ${s.tier}\n${s.eligible ? 'Unastahili mkopo hadi ' + Math.max(...s.offers.map(o => o.amount)).toLocaleString() + ' KES' : 'Weka rekodi zaidi za mavuno'}\n\n0. Rudi (back)`;
     }
     if (input === '3') {
-      const d = await fetch('/api/dashboard').then(r => r.json());
+      const d = await api('/api/dashboard');
       return 'HALI YA HEWA — ' + d.farmer.county.toUpperCase() + '\n\n' +
         d.weather.slice(0, 3).map(w => `${w.day}: ${w.label}, ${w.high}°C${w.rain_mm ? ', mvua ' + w.rain_mm + 'mm' : ''}`).join('\n') +
         '\n\n0. Rudi (back)';
     }
     if (input === '4') {
-      const s = await fetch('/api/score').then(r => r.json());
+      const s = await api('/api/score');
       return s.eligible
         ? `MKOPO\n\nUnastahili:\n${s.offers.map((o, i) => `${i + 1}. ${o.name} — ${o.amount.toLocaleString()} KES`).join('\n')}\n\nTuma nambari kuomba.\n(demo: apply on the web app)\n\n0. Rudi`
         : 'Bado hujafikia kiwango cha mkopo.\nWeka rekodi za mavuno kila msimu.\n\n0. Rudi (back)';
     }
-    if (input === '0') { ussdModal.hidden = true; return ''; }
+    if (input === '0') { closeModal('ussdModal'); return ''; }
   }
-  return USSD_MENU;
+  return ussdMenu();
 }
 
 $('#ussdSend').addEventListener('click', sendUssd);
@@ -676,50 +880,137 @@ async function sendUssd() {
   if (!v) return;
   $('#ussdInput').value = '';
   ussdScreen.textContent = '…';
-  const reply = await ussdReply(v);
-  if (reply) ussdScreen.textContent = reply;
+  try {
+    const reply = await ussdReply(v);
+    if (reply) ussdScreen.textContent = reply;
+  } catch (err) {
+    ussdScreen.textContent = 'Huduma haipatikani kwa sasa.\n(' + err.message + ')\n\n0. Rudi';
+  }
 }
 
-/* ------------------------------------------------ boot */
-initProfileSwitcher().finally(() => {
-  loadDashboard();
+/* ------------------------------------------------ login */
+function showLogin(message = '') {
+  $('#app').hidden = true;
+  $('#loginScreen').hidden = false;
+  $('#loginError').textContent = message;
+  $('#loginError').hidden = !message;
+  $('#loginPhone').focus();
+}
+
+function hideLogin() {
+  $('#loginScreen').hidden = true;
+  $('#app').hidden = false;
+}
+
+$('#loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const submit = $('button[type=submit]', e.target);
+  submit.disabled = true;
+  submit.textContent = 'Signing in…';
+  $('#loginError').hidden = true;
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: $('#loginPhone').value, pin: $('#loginPin').value }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'Sign-in failed');
+    setSession(body.token, body.farmer.id);
+    state.farmer = body.farmer;
+    hideLogin();
+    await startApp();
+  } catch (err) {
+    $('#loginError').textContent = err.message;
+    $('#loginError').hidden = false;
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Sign in';
+    $('#loginPin').value = '';
+  }
 });
+
+/* ------------------------------------------------ boot */
+function refreshActiveView() {
+  const view = $('.nav-item.active')?.dataset.view;
+  if (view === 'markets') loadMarkets(state.marketCrop);
+  else if (view === 'harvests') loadHarvests();
+  else if (view === 'credit') loadCredit();
+  else if (view === 'doctor') loadScanHistory();
+}
+
+async function startApp() {
+  await initProfileSwitcher();
+  await loadDashboard();
+  refreshActiveView();
+}
+
+/* In demo mode the switcher exchanges a farmer id for a real session token,
+   so the on-stage flow stays one click. With DEMO_MODE=0 the server refuses
+   and the PIN login screen is the only way in. */
+async function demoLogin(farmerId) {
+  const res = await fetch('/api/auth/demo-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ farmerId }),
+  });
+  if (!res.ok) return null;
+  const body = await res.json();
+  setSession(body.token, body.farmer.id);
+  state.farmer = body.farmer;
+  return body.farmer;
+}
 
 async function initProfileSwitcher() {
   const switcher = $('#profileSwitcher');
-  if (!switcher) return;
+  if (!switcher || switcher.dataset.ready === '1') return;
 
+  let profiles = [];
   try {
-    const profiles = await fetch('/api/farmers').then(r => r.json());
-
-    // Prevent stale localStorage IDs from causing crashes
-    const isValid = profiles.some(p => p.id === state.selectedFarmerId);
-    if (!isValid && profiles.length > 0) {
-      state.selectedFarmerId = profiles[0].id;
-      localStorage.setItem('mavuno_farmer_id', state.selectedFarmerId);
-    }
-
-    switcher.innerHTML = profiles.map(p => 
-      `<option value="${p.id}" ${p.id === state.selectedFarmerId ? 'selected' : ''}>${p.name} (${p.county})</option>`
-    ).join('');
-
-    switcher.value = state.selectedFarmerId;
-
-    switcher.addEventListener('change', (e) => {
-      state.selectedFarmerId = e.target.value;
-      localStorage.setItem('mavuno_farmer_id', state.selectedFarmerId);
-      loadDashboard();
-      const activeNav = $('.nav-item.active');
-      if (activeNav) {
-        const view = activeNav.dataset.view;
-        if (view === 'markets') loadMarkets(state.marketCrop);
-        else if (view === 'harvests') loadHarvests();
-        else if (view === 'credit') loadCredit();
-        else if (view === 'doctor') loadScanHistory();
-      }
-      toast("Switched farmer profile successfully");
-    });
-  } catch (err) {
-    console.error("Error loading profiles:", err);
+    profiles = await (await fetch('/api/farmers')).json();
+  } catch {
+    switcher.innerHTML = '<option>Profiles unavailable</option>';
+    return;
   }
+
+  const known = profiles.some(p => p.id === state.selectedFarmerId);
+  if (!known && profiles.length) state.selectedFarmerId = profiles[0].id;
+
+  switcher.innerHTML = profiles.map(p =>
+    `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.county)})</option>`).join('');
+  switcher.value = state.selectedFarmerId;
+  switcher.dataset.ready = '1';
+
+  switcher.addEventListener('change', async e => {
+    const farmerId = e.target.value;
+    const farmer = await demoLogin(farmerId);
+    if (!farmer) {
+      // Demo mode is off — switching profiles means signing in as them.
+      clearSession();
+      showLogin('Sign in as this farmer to continue.');
+      return;
+    }
+    await loadDashboard();
+    refreshActiveView();
+    toast(`Switched to ${farmer.name}`);
+  });
+}
+
+(async function boot() {
+  const health = await fetch('/api/health').then(r => r.json()).catch(() => ({ demo_mode: false }));
+  state.demoMode = Boolean(health.demo_mode);
+  $('#demoPinHint').hidden = !state.demoMode;
+
+  // A token in sessionStorage survives a reload; otherwise try demo login.
+  if (!state.token && state.demoMode) await demoLogin(state.selectedFarmerId || undefined);
+  if (!state.token) return showLogin();
+
+  hideLogin();
+  await startApp();
+})();
+
+/* Registering the service worker is what makes the offline claim real: the
+   app shell keeps loading with no connection. */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 }

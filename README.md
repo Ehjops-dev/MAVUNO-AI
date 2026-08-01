@@ -27,14 +27,34 @@ Smallholder farmers feed the country but are locked out of the financial system:
 
 ## Running it
 
-Zero dependencies. Node.js ≥ 22.5 only (uses built-in `node:sqlite`).
+Zero runtime dependencies. Node.js ≥ 22.5 only (uses built-in `node:sqlite`).
 
 ```bash
-node server.js
+npm start
 # → http://localhost:4500
 ```
 
-No `npm install`, no API keys, no internet required.
+No `npm install` and no API keys needed — the database is created and seeded on
+first run.
+
+**Signing in.** The app ships in demo mode (`DEMO_MODE=1`): the sidebar profile
+switcher signs you in as any seeded farmer with one click. Set `DEMO_MODE=0`
+and the PIN login screen is the only way in — the seeded farmers are
+`0712 345 678` (Amina), `0723 456 789` (John) and `0734 567 890` (Mary), PIN
+`1234`.
+
+**Before a demo,** reset the database so rehearsal clicks don't show up on
+stage as extra loans or a duplicated profile:
+
+```bash
+npm run db:reset   # backs up to backups/, then wipes; re-seeds on next start
+```
+
+**Offline.** The app shell is cached by a service worker (`public/sw.js`), so it
+loads with no connection, and the last dashboard, price and score responses are
+served from cache when the network is gone. Leaf analysis runs entirely
+on-device — the photo is never uploaded. Live data (new harvests, loan
+applications) still needs the server.
 
 ## Live PayHero setup
 
@@ -55,20 +75,61 @@ PAYHERO_CALLBACK_URL=https://your-public-domain.com/api/payhero/callback
 Check config without exposing secrets:
 
 ```bash
-curl http://localhost:4501/api/payhero/config
+curl http://localhost:4500/api/payhero/config
 ```
 
 Expected live result includes `"mode":"live"`. If it says `"mode":"demo"`, the app will not send real money.
 
+Server health, including whether the price feed is current:
+
+```bash
+curl http://localhost:4500/api/health
+```
+
+## Security & trust model
+
+The Mavuno Score decides who gets money, so the paths that touch it are locked
+down rather than left open for the demo:
+
+| Control | How it works |
+|---|---|
+| **Authentication** | Farmers sign in with phone + PIN. PINs are stored as scrypt hashes with a per-farmer salt, compared in constant time. Five wrong attempts locks that phone for 15 minutes. |
+| **Sessions** | `POST /api/auth/login` returns an HMAC-signed token (`farmerId.expiry.mac`) with a 2-hour TTL, held in `sessionStorage`. Every farmer-scoped endpoint requires it. A session can only ever act as the farmer it was issued for — there is no header a client can set to become someone else. |
+| **One live loan** | A second application while a loan is `approved` returns 409. With live PayHero credentials, that guard is the difference between one disbursement and one per click. |
+| **Daily cap** | `DAILY_DISBURSEMENT_CAP` (default KES 150,000) bounds what one farmer can receive in 24 hours regardless of tier. |
+| **Disbursement target** | Always the phone on the farmer's record. A client-supplied number is ignored, so a session cannot redirect its own payout. |
+| **Rate limiting** | Per-IP fixed windows: 10/min on auth, 60/min on writes, 600/min on reads. |
+| **Input validation** | Crops and markets must match the catalogue; quantities must be finite and positive; harvest dates must be real and not in the future; text fields reject markup and control characters. |
+| **Output escaping** | Every value interpolated into the DOM passes through `esc()`. |
+| **Transport & headers** | CSP, `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`; same-origin only unless `ALLOWED_ORIGINS` is set. |
+| **Data at rest** | Foreign keys enforced with `ON DELETE CASCADE`; PIN hashes never leave the server; the public farmer roster masks phone numbers. |
+
+## Known limitations
+
+Stated up front, because they are design choices for a prototype rather than
+things we think are finished:
+
+- **Weather is simulated.** `generateWeather()` is a deterministic pattern, not a forecast. Swap in OpenWeather with one function change.
+- **Prices are a seeded random walk,** topped up to today on every boot. The API shape is ready for a live KAMIS / county-board ingest.
+- **The Crop Doctor is a colour-signature heuristic, not a CNN.** It measures chlorosis, necrosis and lesion ratios and matches them against a 14-disease knowledge base. Images that match nothing return *"Not recognised as a crop leaf"* rather than a confident guess.
+- **Repayment is simulated in demo mode.** It writes a labelled receipt for principal plus interest; production would only settle on an M-PESA C2B confirmation callback.
+- **`node:sqlite` is synchronous,** so the server handles one query at a time. Fine for a demo and a few thousand farmers; a real deployment moves to Postgres.
+- **Rate limiting is in-process.** One server, one wallet. Multiple instances would need a shared store.
+- **Offline covers the app shell and last-known data,** not new writes.
+
 ## Architecture
 
 ```
-├── server.js          # Node built-ins only: http server + SQLite + scoring engine
-├── mavuno.db          # SQLite (auto-created & seeded on first run)
+├── server.js               # Node built-ins only: http server + SQLite + auth + scoring engine
+├── mavuno.db               # SQLite (auto-created & seeded on first run, gitignored)
+├── scripts/reset-db.js     # npm run db:reset — wipe and re-seed clean demo data
+├── tests/api.test.js       # 57 automated tests, zero dependencies
 └── public/
-    ├── index.html     # single-page app
-    ├── css/style.css  # hand-crafted design system
-    └── js/app.js      # vanilla JS: on-device leaf analysis, SVG charts, USSD sim
+    ├── index.html          # single-page app + login screen
+    ├── css/style.css       # hand-crafted design system
+    ├── js/app.js           # vanilla JS: on-device leaf analysis, SVG charts, USSD sim
+    ├── sw.js               # service worker: offline app shell + last-known data
+    └── manifest.webmanifest
 ```
 
 - **Mavuno Score engine** (`server.js → computeScore`): weighted 5-factor model over the harvest ledger, mapped to a 300–850 band with loan tiers.
@@ -79,20 +140,28 @@ Expected live result includes `"mode":"live"`. If it says `"mode":"demo"`, the a
 
 ## 3-minute demo script
 
+> Run `npm run db:reset` and restart the server before you go on — a clean
+> database is 3 farmers, 10 harvests, 1 loan and 1 scan.
+
 1. **Dashboard** — "Meet Amina, 3.5 acres in Uasin Gishu. Weather, today's prices and this week's agronomy advice in one glance."
 2. **Crop Doctor** — upload a leaf photo → diagnosis + treatment in seconds. "This scan also just became a data point in her farm record."
 3. **Markets** — flip between crops; point at the spread between markets. "That gap is money the middleman keeps today."
 4. **My Harvests** — log a new harvest live → watch the toast announce her new score. "Every bag she logs is a line in her credit file."
-5. **Mavuno Score** — the gauge, the 5-factor breakdown, then **tap "Apply in one tap"** → loan approved to M-PESA. *"No payslip. No title deed. Just her harvests."*
+5. **Mavuno Score** — the gauge, the 5-factor breakdown, then **tap "Apply & disburse"** → loan approved to M-PESA. *"No payslip. No title deed. Just her harvests."* Tap it a second time to show the active-loan guard: one live loan per farmer, one disbursement.
 6. **Finale** — open the USSD simulator: "And for the 60% of rural Kenya on feature phones — same power, no smartphone."
 
 ## Testing
 
-29 automated tests (all passing) + 6-flow manual UAT — full report in [TESTING.md](TESTING.md).
+57 automated tests (all passing) + 6-flow manual UAT — full report in [TESTING.md](TESTING.md).
 
 ```bash
-node --test tests/api.test.js
+npm test
 ```
+
+The suite spawns two real servers on isolated databases — one in demo mode, one
+with `DEMO_MODE=0` and tight rate limits — and covers authentication, token
+forgery, the loan-safety rails, input validation, price freshness, security
+headers and path traversal.
 
 ## Documentation & presentation
 
@@ -107,3 +176,5 @@ node --test tests/api.test.js
 - Live KAMIS market-price ingestion + SMS price alerts
 - Partner API for SACCOs & MFIs to underwrite against the Mavuno Score
 - Crop insurance priced by the same score
+- Postgres + a shared rate-limit store so the platform scales past one process
+- Real M-PESA C2B settlement for repayments, replacing the simulated receipt

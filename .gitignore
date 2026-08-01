@@ -2,4 +2,6 @@
 *.db
 *.db-shm
 *.db-wal
+*.bak
+backups/
 node_modules/
