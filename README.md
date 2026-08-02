@@ -29,6 +29,12 @@ becomes a credit score that unlocks collateral-free input loans paid out to M-PE
 | --- | --- |
 | ![Market price comparison](docs/figures/shot_markets.png) | ![Credit score and loan offers](docs/figures/shot_credit.png) |
 
+| Harvest ledger | Administrator console |
+| --- | --- |
+| ![Harvest ledger](docs/figures/shot_harvests.png) | ![Administrator control centre](docs/figures/shot_admin.png) |
+
+Regenerate them with `node docs/take_screenshots.js` against a running server.
+
 ## Quick start
 
 ```bash
