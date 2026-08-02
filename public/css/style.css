@@ -990,9 +990,29 @@ a { color: inherit; text-decoration: none; }
     order: 3; width: 100%; margin-left: 0; gap: 22px;
     overflow-x: auto; overscroll-behavior-x: contain;
     padding-bottom: 10px; scrollbar-width: none;
+    max-height: 60px;
+    transition: max-height .2s ease, opacity .2s ease, padding-bottom .2s ease;
   }
   .lp-nav::-webkit-scrollbar { display: none; }
   .lp-nav a { white-space: nowrap; padding-bottom: 6px; }
+
+  /* Giving the nav its own row made the sections reachable, but it also made
+     the bar two rows tall — 123px — and it was sticky, so on a 640px phone it
+     held 19% of the screen for the whole visit and every section heading slid
+     under its translucent lower edge, cut through the middle as you scrolled.
+
+     Folding the row away on scroll was the obvious fix and it is a trap: the
+     bar is sticky but still in flow, so losing 54px of it pulls the whole page
+     up 54px *after* the browser has already computed where an anchor jump
+     should land, and every nav link then overshoots by exactly that much.
+
+     So the bar simply stops being sticky here. It scrolls away like any other
+     content, the phone gets its whole screen back, nothing is ever obscured by
+     it, and anchor targets need no offset at all. The trade is that Sign In
+     does not follow you down the page — the hero CTA and the sign-in band
+     lower down carry that instead. */
+  .lp-header { position: static; }
+  .lp-section, .lp-hero { scroll-margin-top: 12px; }
 }
 
 @media (max-width: 620px) {
@@ -1035,8 +1055,9 @@ a { color: inherit; text-decoration: none; }
   .o-terms { flex-wrap: wrap; gap: 14px 24px; }
   .lp-cta-actions { flex-direction: column; gap: 16px; }
 
-  /* Anchor targets clear the taller wrapped landing header. */
-  .lp-section, .lp-hero { scroll-margin-top: 116px; }
+  /* No offset needed below 861px: the header is not sticky there, so there is
+     nothing overhead for a section to clear. */
+  .lp-section, .lp-hero { scroll-margin-top: 12px; }
   .lp-hero { padding: 44px 0 52px; }
   .lp-section { padding: 54px 0; }
   .lp-lede { font-size: 16px; }
