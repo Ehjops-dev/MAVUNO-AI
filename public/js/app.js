@@ -940,6 +940,10 @@ const screens = {
 };
 
 function showScreen(name) {
+  // Don't leave focus inside the subtree we are about to hide — browsers cope,
+  // but a keyboard or screen-reader user is left on a node that no longer
+  // exists visually.
+  document.activeElement?.blur();
   for (const [key, el] of Object.entries(screens)) el().hidden = key !== name;
   window.scrollTo(0, 0);
 }
@@ -967,8 +971,44 @@ function syncLandingChrome() {
 }
 window.addEventListener('scroll', syncLandingChrome, { passive: true });
 
+/* Last line of defence against autofill. Chrome will still populate a form it
+   has decided is a sign-in form, and it can do so after first paint, so the
+   fields are blanked when the screen opens and again a beat later — skipping
+   anything the farmer has already typed into. */
+function clearAuthFields(formSel) {
+  const fields = $$(`${formSel} input, ${formSel} select`);
+  fields.forEach(el => { el.value = ''; delete el.dataset.touched; });
+  setTimeout(() => fields.forEach(el => { if (!el.dataset.touched) el.value = ''; }), 300);
+}
+$$('#loginForm input, #signupForm input, #signupForm select').forEach(el =>
+  el.addEventListener('input', () => { el.dataset.touched = '1'; }));
+
+/* A PIN is digits, so refuse the other characters at the keystroke rather than
+   at submit. type="password" happily accepts letters, inputmode only steers a
+   phone keypad, and pattern="[0-9]*" fires too late to be useful — the farmer
+   has already typed the wrong thing before anything tells them. Filtering the
+   value also covers paste and drag-and-drop, which no keydown handler would. */
+function restrictChars(el, disallowed) {
+  el.addEventListener('input', () => {
+    const before = el.value;
+    const cleaned = before.replace(disallowed, '');
+    if (cleaned === before) return;
+    // Put the caret back where the farmer was, less whatever was dropped
+    // ahead of it — otherwise a mid-string edit throws them to the end.
+    const caret = el.selectionStart ?? before.length;
+    const head = before.slice(0, caret);
+    const pos = caret - (head.length - head.replace(disallowed, '').length);
+    el.value = cleaned;
+    el.setSelectionRange(pos, pos);
+  });
+}
+['#loginPin', '#signupPin', '#signupPin2'].forEach(sel => restrictChars($(sel), /\D/g));
+// Phone keeps the separators people actually type; the server strips them.
+['#loginPhone', '#signupPhone'].forEach(sel => restrictChars($(sel), /[^\d+\s()-]/g));
+
 function showLogin(message = '') {
   showScreen('login');
+  clearAuthFields('#loginForm');
   $('#loginError').textContent = message;
   $('#loginError').hidden = !message;
   $('#loginPhone').focus();
@@ -977,6 +1017,7 @@ function showLogin(message = '') {
 
 function showSignup(message = '') {
   showScreen('signup');
+  clearAuthFields('#signupForm');
   $('#signupError').textContent = message;
   $('#signupError').hidden = !message;
   $('#signupName').focus();
@@ -1014,6 +1055,9 @@ $('#loginForm').addEventListener('submit', async e => {
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || 'Sign-in failed');
     setSession(body.token, body.farmer);
+    // Clear the credentials before the screen goes away, so a shared handset
+    // keeps neither the number nor the PIN. Registration does the same.
+    e.target.reset();
     showApp();
     await startApp();
     toast(`Karibu, ${body.farmer.name.split(' ')[0]}`);

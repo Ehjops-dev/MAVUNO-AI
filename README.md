@@ -21,7 +21,6 @@ Smallholder farmers feed the country but are locked out of the financial system:
 | 🍃 **AI Crop Doctor** | Photograph a sick leaf → instant diagnosis, treatment plan and prevention advice. Analysis runs **on-device** (colour-signature model), so it works with no data bundle. | Agri-tech |
 | 📈 **Market Intelligence** | Live 60-day price trends across 5 major markets, plus "best market today" ranking so farmers negotiate from strength. | Agri-tech |
 | 💳 **Mavuno Score™** | Every harvest logged builds a 300–850 credit score from 5 signals: season consistency, yield trend, crop diversification, market timing and repayment record. Good scores unlock **collateral-free input loans**, disbursed to M-PESA. | Fintech |
-| 📟 **USSD mode** | Dial `*384*626#` on any feature phone — prices, score, weather and loans with zero smartphone required. (Simulated in-app.) | Inclusion |
 
 **The insight that wins:** a harvest ledger is a financial identity. MavunoAI converts agronomic behaviour into bankable data — the same way M-PESA converted airtime behaviour into M-Shwari credit limits.
 
@@ -37,11 +36,24 @@ npm start
 No `npm install` and no API keys needed — the database is created and seeded on
 first run.
 
-**Signing in.** The app ships in demo mode (`DEMO_MODE=1`): the sidebar profile
-switcher signs you in as any seeded farmer with one click. Set `DEMO_MODE=0`
-and the PIN login screen is the only way in — the seeded farmers are
-`0712 345 678` (Amina), `0723 456 789` (John) and `0734 567 890` (Mary), PIN
-`1234`.
+**Getting in.** The landing page offers two doors:
+
+- **Sign In** — phone plus PIN. The seeded farmers are `0712 345 678` (Amina),
+  `0723 456 789` (John) and `0734 567 890` (Mary), all with PIN `1234`.
+- **Get started** — self-registration. Name, phone, county, farm size and a
+  4–8 digit PIN creates a real account and drops straight into the dashboard.
+
+There is no profile switcher: a session belongs to exactly one farmer, and the
+only way to become someone else is to sign out and sign in again.
+
+A brand-new account has an empty ledger, so the dashboard shows a **"No
+history"** tier and a *"log your first harvest"* prompt instead of a score of
+zero — being new is not the same as being a bad risk. One logged harvest
+activates the score, the credit offers and the market timing.
+
+> For a demo, sign in as Amina — she has 7 harvests, a 754 score and
+> KES 120,000 of eligible credit. Registration is worth showing, but it lands
+> on a deliberately empty dashboard.
 
 **Before a demo,** reset the database so rehearsal clicks don't show up on
 stage as extra loans or a duplicated profile:
@@ -94,6 +106,7 @@ down rather than left open for the demo:
 | Control | How it works |
 |---|---|
 | **Authentication** | Farmers sign in with phone + PIN. PINs are stored as scrypt hashes with a per-farmer salt, compared in constant time. Five wrong attempts locks that phone for 15 minutes. |
+| **Registration** | `POST /api/auth/register` validates the name, Kenyan mobile format, county and farm size, and takes a 4–8 digit PIN. A phone number can be claimed once: uniqueness is checked on the *normalised* number, so `0745…`, `254745…` and `+254 745 …` all collide and a seeded demo account cannot be taken over. It shares the auth rate-limit bucket, so it is not an unmetered way around the login limit. |
 | **Sessions** | `POST /api/auth/login` returns an HMAC-signed token (`farmerId.expiry.mac`) with a 2-hour TTL, held in `sessionStorage`. Every farmer-scoped endpoint requires it. A session can only ever act as the farmer it was issued for — there is no header a client can set to become someone else. |
 | **One live loan** | A second application while a loan is `approved` returns 409. With live PayHero credentials, that guard is the difference between one disbursement and one per click. |
 | **Daily cap** | `DAILY_DISBURSEMENT_CAP` (default KES 150,000) bounds what one farmer can receive in 24 hours regardless of tier. |
@@ -123,14 +136,20 @@ things we think are finished:
 ├── server.js               # Node built-ins only: http server + SQLite + auth + scoring engine
 ├── mavuno.db               # SQLite (auto-created & seeded on first run, gitignored)
 ├── scripts/reset-db.js     # npm run db:reset — wipe and re-seed clean demo data
-├── tests/api.test.js       # 57 automated tests, zero dependencies
+├── tests/api.test.js       # 63 automated tests, zero dependencies
+├── docs/DESIGN.md          # "Verdant Calm" design system the CSS tokens come from
 └── public/
-    ├── index.html          # single-page app + login screen
+    ├── index.html          # landing page + sign in + sign up + the app, one document
     ├── css/style.css       # hand-crafted design system
-    ├── js/app.js           # vanilla JS: on-device leaf analysis, SVG charts, USSD sim
+    ├── js/app.js           # vanilla JS: on-device leaf analysis, SVG charts, routing
+    ├── img/                # landing photography (same-origin: the CSP blocks remote hosts)
     ├── sw.js               # service worker: offline app shell + last-known data
     └── manifest.webmanifest
 ```
+
+The whole product is one HTML document with four screens — landing, sign in,
+sign up and the app — swapped by `showScreen()` in `app.js`. No router, no
+build step, no framework.
 
 - **Mavuno Score engine** (`server.js → computeScore`): weighted 5-factor model over the harvest ledger, mapped to a 300–850 band with loan tiers.
 - **PayHero disbursement demo** (`POST /api/loans`): approving a loan creates a PayHero M-PESA mobile disbursement record. Without credentials it runs in demo mode and shows a queued transaction reference; with credentials set `PAYHERO_USERNAME`, `PAYHERO_PASSWORD`, `PAYHERO_CHANNEL_ID`, and optionally `PAYHERO_CALLBACK_URL`.
@@ -148,26 +167,34 @@ things we think are finished:
 3. **Markets** — flip between crops; point at the spread between markets. "That gap is money the middleman keeps today."
 4. **My Harvests** — log a new harvest live → watch the toast announce her new score. "Every bag she logs is a line in her credit file."
 5. **Mavuno Score** — the gauge, the 5-factor breakdown, then **tap "Apply & disburse"** → loan approved to M-PESA. *"No payslip. No title deed. Just her harvests."* Tap it a second time to show the active-loan guard: one live loan per farmer, one disbursement.
-6. **Finale** — open the USSD simulator: "And for the 60% of rural Kenya on feature phones — same power, no smartphone."
+6. **Finale — a farmer from scratch.** Sign out, tap **Get started**, register in
+   about twenty seconds. The dashboard says *"No history"* and asks for a first
+   harvest: *"Everyone starts here. She isn't a bad risk — she's an unwritten
+   one."* Log one harvest and the score comes alive on stage.
 
 ## Testing
 
-57 automated tests (all passing) + 6-flow manual UAT — full report in [TESTING.md](TESTING.md).
+63 automated tests, all passing.
 
 ```bash
 npm test
 ```
 
-The suite spawns two real servers on isolated databases — one in demo mode, one
-with `DEMO_MODE=0` and tight rate limits — and covers authentication, token
-forgery, the loan-safety rails, input validation, price freshness, security
-headers and path traversal.
+The suite spawns two real servers on isolated databases — one with generous
+limits, one throttled to 3 auth calls a minute — and covers authentication,
+registration (duplicate numbers in every format, malformed input, seeded-account
+takeover), token forgery, the loan-safety rails, input validation, price
+freshness, security headers and path traversal.
+
+The manual UAT report in [TESTING.md](TESTING.md) is from the 57-test run and
+has not been re-run since registration was added.
 
 ## Documentation & presentation
 
 - `docs/MavunoAI-Documentation.docx` — full project documentation (Kabarak research-project format, chapters 1–5)
 - `docs/MavunoAI-Pitch.pptx` — 12-slide pitch deck with per-slide speaker notes and presenter assignments
 - `docs/PRESENTER-GUIDE.md` — group roles, timing, demo checklist and judge Q&A prep
+- `docs/DESIGN.md` — the "Verdant Calm" design system (colour ramp, type scale, radii, component specs) that the tokens at the top of `public/css/style.css` were transcribed from
 - (`docx`/`pptxgenjs` in package.json are dev-only, used to regenerate the documents; the app itself has zero runtime dependencies)
 
 ## What we'd build next
@@ -178,3 +205,4 @@ headers and path traversal.
 - Crop insurance priced by the same score
 - Postgres + a shared rate-limit store so the platform scales past one process
 - Real M-PESA C2B settlement for repayments, replacing the simulated receipt
+- USSD access (`*384*626#`) so the 60% of rural Kenya on feature phones get prices, score and loans without a smartphone
