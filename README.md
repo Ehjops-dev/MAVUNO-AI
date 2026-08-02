@@ -19,22 +19,6 @@ becomes a credit score that unlocks collateral-free input loans paid out to M-PE
 - **Admin console** — portfolio analytics, farmer register, credit book and audit trail.
 - **Works offline** — service worker caches the app shell and the last known data.
 
-## Screenshots
-
-| Farmer dashboard | Crop Doctor |
-| --- | --- |
-| ![Farmer dashboard](docs/figures/shot_dashboard.png) | ![Crop Doctor diagnosis](docs/figures/shot_doctor.png) |
-
-| Market prices | Credit and loans |
-| --- | --- |
-| ![Market price comparison](docs/figures/shot_markets.png) | ![Credit score and loan offers](docs/figures/shot_credit.png) |
-
-| Harvest ledger | Administrator console |
-| --- | --- |
-| ![Harvest ledger](docs/figures/shot_harvests.png) | ![Administrator control centre](docs/figures/shot_admin.png) |
-
-Regenerate them with `node docs/take_screenshots.js` against a running server.
-
 ## Quick start
 
 ```bash
