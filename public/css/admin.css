@@ -1,0 +1,223 @@
+/* ================================================================
+   MavunoAI — administrator console
+   Same "Verdant Calm" tokens as the farmer app, one deliberate shift:
+   the rail and identity chip carry deep emerald so an operator can
+   never mistake which side of the platform they are looking at.
+   ================================================================ */
+
+/* Rail: deep emerald instead of white. It is the only chrome difference,
+   and it is the one that reads instantly from across a room. */
+.admin-app .sidebar {
+  background: linear-gradient(185deg, var(--primary-ink) 0%, var(--primary-deep) 100%);
+  border-right-color: rgba(255, 255, 255, .08);
+}
+.admin-app .brand-name { color: #fff; }
+.admin-app .brand-name span { color: #6ee7a7; }
+.admin-app .brand-tag { color: rgba(255, 255, 255, .58); }
+.admin-app .nav-label { color: rgba(255, 255, 255, .45); }
+.admin-app .nav-item { color: rgba(255, 255, 255, .74); }
+.admin-app .nav-item:hover { background: rgba(255, 255, 255, .09); color: #fff; }
+.admin-app .nav-item.active { background: rgba(255, 255, 255, .14); color: #fff; }
+.admin-app .nav-item.active::before { background: #6ee7a7; }
+.admin-app .sidebar-foot { border-top-color: rgba(255, 255, 255, .14); }
+.admin-app .signout-btn { color: rgba(255, 255, 255, .74); }
+.admin-app .signout-btn:hover { background: rgba(220, 38, 38, .22); color: #fecaca; }
+.admin-app .profile { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .12); }
+.admin-app .account-name { color: #fff; }
+.admin-app .account-meta { color: rgba(255, 255, 255, .6); }
+.avatar-admin { background: #6ee7a7; color: var(--primary-ink); }
+
+.chip-admin { background: var(--primary-deep); color: #fff; }
+.chip-neutral { background: var(--surface-alt); color: var(--muted); }
+
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover:not(:disabled) { background: #b91c1c; }
+
+/* ------------------------------------------------------------- toolbars */
+.toolbar { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.admin-search, .admin-select {
+  font-family: var(--sans); font-size: 13px; font-weight: 500; color: var(--ink);
+  padding: 9px 13px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.admin-search { min-width: 240px; }
+.admin-search:focus, .admin-select:focus {
+  outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(22, 163, 74, .12);
+}
+/* Filter pills — the credit book and payments ledger both slice by status. */
+.filter-pill {
+  font-family: var(--sans); font-size: 12.5px; font-weight: 600; cursor: pointer;
+  padding: 8px 15px; border-radius: var(--radius-pill);
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  transition: all .15s ease;
+}
+.filter-pill:hover { border-color: var(--primary); color: var(--primary); }
+.filter-pill.active { background: var(--primary-deep); border-color: var(--primary-deep); color: #fff; }
+.filter-pill small { opacity: .7; margin-left: 5px; font-weight: 700; }
+
+/* --------------------------------------------------------- key/value list */
+/* The console's workhorse: a label, an optional bar, and a figure. Used for
+   portfolio health, counties, crop mix and every system panel. */
+.admin-list { display: flex; flex-direction: column; }
+.al-row {
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px 14px;
+  padding: 13px 0; border-bottom: 1px solid var(--line-soft);
+}
+.al-row:last-child { border-bottom: 0; }
+.al-key { font-size: 13.5px; font-weight: 500; color: var(--ink); }
+.al-key small { display: block; font-size: 11.5px; font-weight: 500; color: var(--muted); margin-top: 3px; }
+.al-value {
+  font-size: 14.5px; font-weight: 700; color: var(--ink-strong);
+  font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
+}
+.al-value small { display: block; font-size: 11.5px; font-weight: 500; color: var(--muted); margin-top: 3px; }
+.al-value.accent { color: var(--primary); }
+.al-value.danger { color: var(--danger); }
+.al-bar { grid-column: 1 / -1; height: 6px; border-radius: var(--radius-pill); background: var(--surface-alt); overflow: hidden; }
+.al-bar span {
+  display: block; height: 100%; width: 0; border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--primary), var(--primary-deep));
+  transition: width .9s cubic-bezier(.22, 1, .36, 1);
+}
+.al-bar.warn span { background: linear-gradient(90deg, #f59e0b, var(--warning)); }
+.al-bar.risk span { background: linear-gradient(90deg, #f87171, var(--danger)); }
+
+/* stat strip under the sign-up chart */
+.admin-substats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 2px; margin-top: 20px; background: var(--line-soft);
+  border: 1px solid var(--line-soft); border-radius: 14px; overflow: hidden;
+}
+.admin-substat { background: var(--surface); padding: 16px 18px; }
+.as-value { font-size: 21px; font-weight: 700; letter-spacing: -.03em; color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+.as-value small { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 3px; }
+.as-label { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+
+/* ------------------------------------------------------------- activity */
+.activity-feed { display: flex; flex-direction: column; max-height: 340px; overflow-y: auto; }
+.activity {
+  display: flex; align-items: flex-start; gap: 13px;
+  padding: 12px 0; border-bottom: 1px solid var(--line-soft);
+}
+.activity:last-child { border-bottom: 0; }
+.act-icon {
+  display: grid; place-items: center; width: 32px; height: 32px; flex: none;
+  border-radius: 10px; background: var(--surface-alt); font-size: 14px;
+}
+.act-icon.harvest { background: var(--mint); }
+.act-icon.loan { background: var(--info-soft); }
+.act-icon.scan { background: var(--warning-soft); }
+.act-body { min-width: 0; flex: 1; }
+.act-who { font-size: 13.5px; font-weight: 600; color: var(--ink-strong); }
+.act-what { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.act-when { font-size: 11.5px; color: var(--muted-soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* --------------------------------------------------------------- tables */
+/* Nine columns rather than the farmer ledger's eight, and several carry money:
+   widen the scroll floor so figures and counties stop wrapping mid-cell. */
+.admin-app .ledger { min-width: 1080px; }
+.admin-app .ledger td { white-space: nowrap; }
+.ledger .cell-strong { font-weight: 600; color: var(--ink-strong); }
+.ledger .cell-sub { display: block; font-size: 11.5px; font-weight: 500; color: var(--muted); margin-top: 3px; }
+.ledger .row-action { text-align: right; white-space: nowrap; }
+.ledger tr.is-suspended td { background: rgba(220, 38, 38, .035); }
+.ledger .score-pill {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink-strong);
+}
+.ledger .score-pill small { font-size: 11px; font-weight: 600; color: var(--muted); }
+.table-empty { padding: 30px 14px; color: var(--muted); font-size: 14px; }
+
+/* editable price board */
+.price-board td { padding: 10px 8px; }
+.price-cell {
+  width: 100%; display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+  padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); cursor: pointer; font-family: var(--sans); text-align: left;
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.price-cell:hover { border-color: var(--primary); background: var(--surface-tint); box-shadow: var(--shadow-calm); }
+.pc-price { font-size: 15px; font-weight: 700; color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+.pc-drift { font-size: 11px; font-weight: 600; color: var(--muted); }
+.pc-drift.up { color: var(--primary); }
+.pc-drift.down { color: var(--danger); }
+
+/* ---------------------------------------------------------- split panels */
+.admin-split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+
+/* ---------------------------------------------------------- announcements */
+.notice-list { display: flex; flex-direction: column; gap: 14px; }
+.notice {
+  display: flex; gap: 16px; align-items: flex-start;
+  border: 1px solid var(--line); border-left-width: 4px; border-radius: 14px; padding: 18px 20px;
+  background: var(--surface);
+}
+.notice.level-info { border-left-color: var(--info); }
+.notice.level-advisory { border-left-color: var(--warning); }
+.notice.level-urgent { border-left-color: var(--danger); }
+.notice.is-paused { opacity: .6; background: var(--surface-alt); }
+.notice-main { flex: 1; min-width: 0; }
+.notice-title { font-size: 15px; font-weight: 700; color: var(--ink-strong); }
+.notice-body { font-size: 13.5px; line-height: 1.6; color: var(--muted); margin-top: 6px; }
+.notice-meta { font-size: 11.5px; color: var(--muted-soft); margin-top: 10px; }
+.notice-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* announcement banner on the farmer dashboard */
+.notice-slot { grid-column: 1 / -1; display: grid; gap: 12px; }
+.notice-banner {
+  display: flex; gap: 16px; align-items: flex-start;
+  border-radius: 16px; padding: 18px 22px;
+  border: 1px solid var(--mint); background: var(--surface-tint);
+}
+.notice-banner.level-advisory { border-color: #fcd34d; background: var(--warning-soft); }
+.notice-banner.level-urgent { border-color: #fca5a5; background: var(--danger-soft); }
+.nb-icon { font-size: 20px; line-height: 1.2; }
+.nb-label { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.nb-title { font-size: 15px; font-weight: 700; color: var(--ink-strong); margin-top: 4px; }
+.nb-body { font-size: 13.5px; line-height: 1.6; color: var(--ink); margin-top: 5px; }
+
+/* --------------------------------------------------------------- modals */
+.modal-wide { width: min(880px, 100%); }
+.modal-narrow { width: min(440px, 100%); }
+.modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+.modal-head .modal-sub { margin-bottom: 0; }
+.field textarea {
+  font-family: var(--sans); font-size: 14.5px; color: var(--ink); resize: vertical;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); font-weight: 500;
+}
+.field textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(22, 163, 74, .12); }
+
+/* farmer file */
+.file-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 2px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: 14px; overflow: hidden; margin-bottom: 22px; }
+.file-cell { background: var(--surface); padding: 15px 16px; }
+.file-label { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.file-value { font-size: 16px; font-weight: 700; color: var(--ink-strong); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.file-section { margin-top: 24px; }
+.file-section h3 { font-size: 13px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+.file-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
+.mini-table { width: 100%; border-collapse: collapse; }
+.mini-table th {
+  text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
+}
+.mini-table td { padding: 10px; border-bottom: 1px solid var(--line-soft); font-size: 13px; color: var(--ink); }
+.mini-table tr:last-child td { border-bottom: 0; }
+.mini-table .num { font-variant-numeric: tabular-nums; }
+.mini-scroll { max-height: 230px; overflow-y: auto; }
+.temp-pin {
+  display: flex; align-items: center; gap: 12px; margin-top: 18px;
+  border: 1px dashed var(--primary); border-radius: 14px; padding: 16px 18px; background: var(--surface-tint);
+}
+.temp-pin strong { font-size: 26px; font-weight: 700; letter-spacing: .18em; color: var(--primary-deep); font-variant-numeric: tabular-nums; }
+.temp-pin span { font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+
+/* ---------------------------------------------------------- responsive */
+@media (max-width: 1020px) {
+  .admin-split { grid-template-columns: 1fr; }
+}
+@media (max-width: 860px) {
+  .toolbar { width: 100%; margin-left: 0; }
+  .admin-search { min-width: 0; flex: 1; }
+  .card-title { align-items: flex-start; }
+}

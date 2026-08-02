@@ -9,6 +9,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌾</text></svg>">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/admin.css">
 <!-- Inter loads non-blockingly: with no connection the app still renders
      immediately in the local system-font fallback. app.js flips media to
      "all" once parsed — an inline onload handler is blocked by our CSP. -->
@@ -437,6 +438,10 @@
         <!-- 12-column grid: four KPIs, then guidance beside credit, then the
              two feeds. Every row fills the width, so no card is left hanging. -->
         <div class="bento">
+          <!-- Notices an administrator has broadcast. Empty and hidden unless
+               there is something addressed to this farmer. -->
+          <div class="notice-slot" id="dashNotices" hidden></div>
+
           <article class="card kpi col-3">
             <div class="kpi-top">
               <span class="kpi-label">Farm score</span>
@@ -666,6 +671,497 @@
   </div>
 </div>
 
+<!-- ============================================================== ADMIN -->
+<!-- Same shell language as the farmer app — rail, top bar, bento cards — so an
+     operator who has seen one screen can read the other. What differs is scope:
+     every number here is platform-wide, and every write is audited. -->
+<div class="app admin-app" id="adminApp" hidden>
+
+  <aside class="sidebar" id="adminSidebar">
+    <div class="brand">
+      <div>
+        <div class="brand-name">Mavuno<span>AI</span></div>
+        <div class="brand-tag">Control centre</div>
+      </div>
+    </div>
+
+    <p class="nav-label">Platform</p>
+    <nav class="nav" aria-label="Admin">
+      <button type="button" class="nav-item active" data-admin-view="overview" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h8v8H3zm10 0h8v5h-8zM3 13h8v8H3zm10 3h8v5h-8z"/></svg>
+        <span class="nav-text">Overview</span>
+      </button>
+      <button type="button" class="nav-item" data-admin-view="farmers">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.3 0-7 1.2-7 3.5V19h9v-2.5c0-.9.5-1.7 1.3-2.3A12 12 0 0 0 8 13zm8 0c-.9 0-1.9.1-2.9.4 1.1.8 1.9 1.8 1.9 3.1V19h8v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg>
+        <span class="nav-text">Farmers</span>
+      </button>
+      <button type="button" class="nav-item" data-admin-view="credit">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm1 3v2h16V9zm0 4v3h7v-3z"/></svg>
+        <span class="nav-text">Credit book</span>
+      </button>
+      <button type="button" class="nav-item" data-admin-view="payments">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10a2 2 0 0 1 2 2v14l-3-2-2 2-2-2-2 2-2-2-3 2V6a2 2 0 0 1 2-2zm1 5h8v2H8zm0 4h8v2H8z"/></svg>
+        <span class="nav-text">Payments</span>
+      </button>
+      <button type="button" class="nav-item" data-admin-view="health">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C8 6 4 8 4 13a8 8 0 0 0 16 0c0-5-4-7-8-11zm0 17a5 5 0 0 1-5-5h2a3 3 0 0 0 3 3z"/></svg>
+        <span class="nav-text">Crop health</span>
+      </button>
+      <button type="button" class="nav-item" data-admin-view="markets">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18v2H3zM5 18h3v-7H5zm5.5 0h3V6h-3zm5.5 0h3v-4h-3z"/></svg>
+        <span class="nav-text">Market feed</span>
+      </button>
+      <button type="button" class="nav-item" data-admin-view="notices">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11v3l3 2v1H3v-1l3-2v-3a6 6 0 0 1 5-5.9V4a1 1 0 0 1 2 0v1.1A6 6 0 0 1 18 11zm-6 11a2.5 2.5 0 0 1-2.4-2h4.8A2.5 2.5 0 0 1 12 22z"/></svg>
+        <span class="nav-text">Announcements</span>
+      </button>
+    </nav>
+
+    <p class="nav-label">Operations</p>
+    <nav class="nav" aria-label="Admin operations">
+      <button type="button" class="nav-item" data-admin-view="audit">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h9l5 5v15H6zm8 1.5V8h4.5zM8 12h8v2H8zm0 4h8v2H8z"/></svg>
+        <span class="nav-text">Audit trail</span>
+      </button>
+      <button type="button" class="nav-item" data-admin-view="system">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 4 4 4 4 0 0 0-4-4zm9 4a8.7 8.7 0 0 0-.2-1.7l2-1.6-2-3.4-2.4 1a8.8 8.8 0 0 0-2.9-1.7L15 2H9l-.5 2.6a8.8 8.8 0 0 0-2.9 1.7l-2.4-1-2 3.4 2 1.6a8.6 8.6 0 0 0 0 3.4l-2 1.6 2 3.4 2.4-1a8.8 8.8 0 0 0 2.9 1.7L9 22h6l.5-2.6a8.8 8.8 0 0 0 2.9-1.7l2.4 1 2-3.4-2-1.6A8.7 8.7 0 0 0 21 12z"/></svg>
+        <span class="nav-text">System</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <button type="button" class="signout-btn" id="adminSignOut" title="Sign out">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17v-2H5V9h5V7l5 5zM14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5v-2h5V5h-5z"/></svg>
+        <span class="nav-text">Sign out</span>
+      </button>
+      <div class="profile">
+        <span class="avatar avatar-admin" id="adminAvatar" aria-hidden="true">—</span>
+        <span class="account-id">
+          <span class="account-name" id="adminName">—</span>
+          <span class="account-meta" id="adminMeta">Administrator</span>
+        </span>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main-wrap">
+    <header class="topbar">
+      <button type="button" class="icon-btn menu-btn" id="adminMenuToggle" aria-label="Collapse navigation" aria-expanded="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+      </button>
+      <div class="topbar-title" id="adminTopbarTitle">Overview</div>
+      <div class="topbar-actions">
+        <span class="chip chip-admin">Administrator</span>
+        <span class="chip" id="adminFeedChip" title="Price feed status">—</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="adminRefresh">↻ Refresh</button>
+      </div>
+    </header>
+
+    <main class="main">
+
+      <!-- ============ OVERVIEW ============ -->
+      <section class="view active" id="view-admin-overview">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Platform intelligence</span>
+            <h1 class="headline">Control centre</h1>
+            <p class="sub" id="adminSubline">Every farmer, facility and shilling on MavunoAI, as of this moment.</p>
+          </div>
+        </header>
+
+        <div class="bento" id="adminOverview">
+          <article class="card kpi col-3">
+            <div class="kpi-top"><span class="kpi-label">Registered farmers</span><span class="chip chip-mint" id="ovNew">—</span></div>
+            <div class="kpi-value" id="ovFarmers">—</div>
+            <div class="kpi-note" id="ovFarmersNote">—</div>
+          </article>
+          <article class="card kpi col-3">
+            <div class="kpi-top"><span class="kpi-label">Credit outstanding</span></div>
+            <div class="kpi-value"><span class="metric-cur">KES</span> <span id="ovOutstanding">—</span></div>
+            <div class="kpi-note" id="ovOutstandingNote">—</div>
+          </article>
+          <article class="card kpi col-3">
+            <div class="kpi-top"><span class="kpi-label">Repayment rate</span><span class="chip" id="ovRiskChip">—</span></div>
+            <div class="kpi-value" id="ovRepayment">—</div>
+            <div class="kpi-note" id="ovRepaymentNote">—</div>
+          </article>
+          <article class="card kpi col-3">
+            <div class="kpi-top"><span class="kpi-label">Average Mavuno Score</span></div>
+            <div class="kpi-value" id="ovScore">—<span class="metric-of">/ 850</span></div>
+            <div class="kpi-note" id="ovScoreNote">—</div>
+          </article>
+
+          <article class="card col-8">
+            <div class="card-title">Farmer sign-ups · last 12 months
+              <span class="muted card-title-action" id="ovSignupTotal">—</span>
+            </div>
+            <div class="chart-wrap"><svg id="ovSignupChart" viewBox="0 0 720 220" role="img" aria-label="Sign-ups per month"></svg></div>
+            <div class="admin-substats" id="ovSubstats"></div>
+          </article>
+
+          <article class="card col-4">
+            <div class="card-title">Portfolio health</div>
+            <div class="admin-list" id="ovPortfolio"></div>
+          </article>
+
+          <article class="card col-6">
+            <div class="card-title">Mavuno Score distribution
+              <span class="muted card-title-action" id="ovRated">—</span>
+            </div>
+            <div class="breakdown" id="ovBands"></div>
+          </article>
+
+          <article class="card col-6">
+            <div class="card-title">Live activity</div>
+            <div class="activity-feed" id="ovActivity"></div>
+          </article>
+
+          <article class="card col-6">
+            <div class="card-title">Counties</div>
+            <div class="admin-list" id="ovCounties"></div>
+          </article>
+
+          <article class="card col-6">
+            <div class="card-title">Crop mix by volume</div>
+            <div class="admin-list" id="ovCrops"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ============ FARMERS ============ -->
+      <section class="view" id="view-admin-farmers">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Accounts</span>
+            <h1 class="headline">Farmer register</h1>
+            <p class="sub">Search the register, open a file, and act on the account.</p>
+          </div>
+        </header>
+
+        <div class="stat-row" id="farmerStats"></div>
+
+        <div class="card table-card">
+          <div class="card-title">
+            <span>All accounts <span class="muted" id="farmerCount">—</span></span>
+            <div class="toolbar">
+              <input type="search" class="admin-search" id="farmerSearch" placeholder="Search name, phone or county" aria-label="Search farmers">
+              <select class="admin-select" id="farmerStatusFilter" aria-label="Filter by status">
+                <option value="all">All statuses</option>
+                <option value="active">Active</option>
+                <option value="suspended">Suspended</option>
+              </select>
+              <select class="admin-select" id="farmerSort" aria-label="Sort farmers">
+                <option value="score">Sort: score</option>
+                <option value="name">Sort: name</option>
+                <option value="joined">Sort: newest</option>
+                <option value="revenue">Sort: revenue</option>
+                <option value="borrowed">Sort: borrowed</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table class="ledger" id="farmerTable">
+              <caption class="sr-only">Registered farmers</caption>
+              <thead><tr>
+                <th scope="col">Farmer</th><th scope="col">County</th><th scope="col">Score</th>
+                <th scope="col">Harvests</th><th scope="col">Produce</th><th scope="col">Revenue</th>
+                <th scope="col">Borrowed</th><th scope="col">Status</th><th scope="col"></th>
+              </tr></thead>
+              <tbody aria-busy="false"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ CREDIT BOOK ============ -->
+      <section class="view" id="view-admin-credit">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Agri-credit</span>
+            <h1 class="headline">Credit book</h1>
+            <p class="sub">Every facility disbursed against a Mavuno Score, and where it stands today.</p>
+          </div>
+        </header>
+
+        <div class="stat-row" id="loanStats"></div>
+
+        <div class="card table-card">
+          <div class="card-title">
+            <span>Facilities</span>
+            <div class="toolbar" id="loanFilters"></div>
+          </div>
+          <div class="table-scroll">
+            <table class="ledger" id="loanTable">
+              <caption class="sr-only">All loan facilities</caption>
+              <thead><tr>
+                <th scope="col">Farmer</th><th scope="col">Facility</th><th scope="col">Principal</th>
+                <th scope="col">Total due</th><th scope="col">Terms</th><th scope="col">Score</th>
+                <th scope="col">Opened</th><th scope="col">Status</th><th scope="col">Action</th>
+              </tr></thead>
+              <tbody aria-busy="false"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ PAYMENTS ============ -->
+      <section class="view" id="view-admin-payments">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Money movement</span>
+            <h1 class="headline">Payments ledger</h1>
+            <p class="sub">Disbursements out and repayments in, exactly as the rail reported them.</p>
+          </div>
+        </header>
+
+        <div class="stat-row" id="paymentStats"></div>
+
+        <div class="card table-card">
+          <div class="card-title">
+            <span>Transactions</span>
+            <div class="toolbar" id="paymentFilters"></div>
+          </div>
+          <div class="table-scroll">
+            <table class="ledger" id="paymentTable">
+              <caption class="sr-only">Payment transactions</caption>
+              <thead><tr>
+                <th scope="col">When</th><th scope="col">Farmer</th><th scope="col">Direction</th>
+                <th scope="col">Amount</th><th scope="col">Rail</th><th scope="col">Reference</th>
+                <th scope="col">M-PESA number</th><th scope="col">Status</th>
+              </tr></thead>
+              <tbody aria-busy="false"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ CROP HEALTH ============ -->
+      <section class="view" id="view-admin-health">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Surveillance</span>
+            <h1 class="headline">Crop health watch</h1>
+            <p class="sub">Every scan farmers run is an early-warning signal — read at platform scale.</p>
+          </div>
+        </header>
+
+        <div class="admin-split">
+          <div class="card">
+            <div class="card-title">Most reported findings</div>
+            <div class="admin-list" id="healthDiseases"></div>
+          </div>
+          <div class="card">
+            <div class="card-title">Severity mix</div>
+            <div class="breakdown" id="healthSeverity"></div>
+            <div class="card-title" style="margin-top:26px">Where scans come from</div>
+            <div class="admin-list" id="healthCounties"></div>
+          </div>
+        </div>
+
+        <div class="card table-card" style="margin-top:20px">
+          <div class="card-title">Recent scans</div>
+          <div class="table-scroll">
+            <table class="ledger" id="healthTable">
+              <caption class="sr-only">Recent crop scans</caption>
+              <thead><tr>
+                <th scope="col">When</th><th scope="col">Farmer</th><th scope="col">County</th>
+                <th scope="col">Crop</th><th scope="col">Finding</th><th scope="col">Confidence</th><th scope="col">Severity</th>
+              </tr></thead>
+              <tbody aria-busy="false"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ MARKET FEED ============ -->
+      <section class="view" id="view-admin-markets">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Price feed</span>
+            <h1 class="headline">Market feed control</h1>
+            <p class="sub">Today's quote per crop and market. Overrides take effect immediately and are audited.</p>
+          </div>
+        </header>
+
+        <div class="card">
+          <div class="card-title">
+            <span>Today's board <span class="muted" id="priceDay">—</span></span>
+            <span class="chip card-title-action" id="priceFresh">—</span>
+          </div>
+          <div class="table-scroll">
+            <table class="ledger price-board" id="priceTable">
+              <caption class="sr-only">Today's price board</caption>
+              <thead><tr id="priceHead"><th scope="col">Crop</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="card-foot muted">Each cell shows today's quote in KES/kg and its drift from the 7-day average. Click a cell to correct it.</p>
+        </div>
+      </section>
+
+      <!-- ============ ANNOUNCEMENTS ============ -->
+      <section class="view" id="view-admin-notices">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Broadcast</span>
+            <h1 class="headline">Announcements</h1>
+            <p class="sub">Notices published here appear on the dashboard of every farmer they are aimed at.</p>
+          </div>
+          <button type="button" class="btn btn-primary" id="newAnnouncement">＋ New announcement</button>
+        </header>
+
+        <div class="card">
+          <div class="card-title">Published notices</div>
+          <div class="notice-list" id="noticeList"></div>
+        </div>
+      </section>
+
+      <!-- ============ AUDIT ============ -->
+      <section class="view" id="view-admin-audit">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Accountability</span>
+            <h1 class="headline">Audit trail</h1>
+            <p class="sub">Every administrative write, who made it and what it changed.</p>
+          </div>
+        </header>
+
+        <div class="card table-card">
+          <div class="card-title">Recent administrative actions</div>
+          <div class="table-scroll">
+            <table class="ledger" id="auditTable">
+              <caption class="sr-only">Administrative actions</caption>
+              <thead><tr>
+                <th scope="col">When</th><th scope="col">Administrator</th><th scope="col">Action</th>
+                <th scope="col">Target</th><th scope="col">Change</th>
+              </tr></thead>
+              <tbody aria-busy="false"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SYSTEM ============ -->
+      <section class="view" id="view-admin-system">
+        <header class="view-head">
+          <div>
+            <span class="label-caps">Operations</span>
+            <h1 class="headline">System status</h1>
+            <p class="sub">What this instance is running, what it is holding, and the rails it enforces.</p>
+          </div>
+        </header>
+
+        <div class="bento">
+          <article class="card col-4">
+            <div class="card-title">Runtime</div>
+            <div class="admin-list" id="sysRuntime"></div>
+          </article>
+          <article class="card col-4">
+            <div class="card-title">Safety rails</div>
+            <div class="admin-list" id="sysPolicy"></div>
+          </article>
+          <article class="card col-4">
+            <div class="card-title">Database</div>
+            <div class="admin-list" id="sysDatabase"></div>
+          </article>
+          <article class="card col-6">
+            <div class="card-title">Administrator accounts</div>
+            <div class="admin-list" id="sysAdmins"></div>
+          </article>
+          <article class="card col-6">
+            <div class="card-title">Disbursement rail</div>
+            <div class="admin-list" id="sysPayhero"></div>
+          </article>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ============ FARMER FILE MODAL ============ -->
+<div class="modal-backdrop" id="farmerModal" hidden>
+  <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="farmerModalTitle">
+    <div class="modal-head">
+      <div>
+        <h2 class="modal-title" id="farmerModalTitle">Farmer file</h2>
+        <p class="modal-sub" id="farmerModalSub">—</p>
+      </div>
+      <button type="button" class="icon-btn" id="closeFarmerModal" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
+      </button>
+    </div>
+    <div id="farmerModalBody"></div>
+  </div>
+</div>
+
+<!-- ============ ANNOUNCEMENT MODAL ============ -->
+<div class="modal-backdrop" id="announcementModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="announcementModalTitle">
+    <h2 class="modal-title" id="announcementModalTitle">Publish an announcement</h2>
+    <p class="modal-sub">It appears on the dashboard of every farmer it is addressed to, until you pause it.</p>
+    <form id="announcementForm">
+      <div class="form-row">
+        <label class="field">Priority
+          <select name="level">
+            <option value="info">Information</option>
+            <option value="advisory">Advisory</option>
+            <option value="urgent">Urgent</option>
+          </select>
+        </label>
+        <label class="field">Audience
+          <select name="county" id="announcementCounty">
+            <option value="">All counties</option>
+          </select>
+        </label>
+      </div>
+      <label class="field" style="margin-bottom:16px">Headline
+        <input name="title" type="text" maxlength="90" required placeholder="e.g. Fall armyworm alert">
+      </label>
+      <label class="field">Message
+        <textarea name="body" maxlength="400" rows="4" required placeholder="What should farmers do, and by when?"></textarea>
+      </label>
+      <p class="login-error" id="announcementError" role="alert" hidden></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="cancelAnnouncement">Cancel</button>
+        <button type="submit" class="btn btn-primary">Publish</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ PRICE OVERRIDE MODAL ============ -->
+<div class="modal-backdrop" id="priceModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="priceModalTitle">
+    <h2 class="modal-title" id="priceModalTitle">Correct today's quote</h2>
+    <p class="modal-sub" id="priceModalSub">—</p>
+    <form id="priceForm">
+      <label class="field">Price (KES per kg)
+        <input name="price_per_kg" type="number" min="1" max="10000" step="0.1" required>
+      </label>
+      <p class="login-error" id="priceError" role="alert" hidden></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="cancelPrice">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save quote</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ CONFIRM MODAL ============ -->
+<!-- A real dialog rather than window.confirm(): destructive admin actions
+     deserve to say what they will do, in the app's own voice. -->
+<div class="modal-backdrop" id="confirmModal" hidden>
+  <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <h2 class="modal-title" id="confirmTitle">Are you sure?</h2>
+    <p class="modal-sub" id="confirmBody">—</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="confirmCancel">Cancel</button>
+      <button type="button" class="btn btn-danger" id="confirmOk">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ ADD HARVEST MODAL ============ -->
 <div class="modal-backdrop" id="harvestModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="harvestModalTitle">
@@ -711,5 +1207,6 @@
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="/js/app.js"></script>
+<script src="/js/admin.js"></script>
 </body>
 </html>

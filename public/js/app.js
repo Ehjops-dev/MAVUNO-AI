@@ -112,6 +112,8 @@ const state = {
   leafImage: null,
   token: sessionStorage.getItem('mavuno_token') || '',
   farmer: null,
+  // 'farmer' or 'admin' — the server decides, and says so on every /api/me.
+  role: 'farmer',
 };
 
 /* ------------------------------------------------ api client */
@@ -145,9 +147,10 @@ async function api(path, options = {}) {
   return body;
 }
 
-function setSession(token, farmer) {
+function setSession(token, farmer, role = 'farmer') {
   state.token = token;
   state.farmer = farmer;
+  state.role = role;
   // sessionStorage, not localStorage: the token dies with the tab.
   sessionStorage.setItem('mavuno_token', token);
 }
@@ -155,6 +158,7 @@ function setSession(token, farmer) {
 function clearSession() {
   state.token = '';
   state.farmer = null;
+  state.role = 'farmer';
   sessionStorage.removeItem('mavuno_token');
 }
 
@@ -165,12 +169,14 @@ const VIEW_TITLES = {
 };
 
 function showView(view) {
-  $$('.nav-item').forEach(b => {
+  // Scoped to #app: the admin console reuses the same rail classes, and an
+  // unscoped selector would drive both shells from one click.
+  $$('#app .nav-item').forEach(b => {
     const on = b.dataset.view === view;
     b.classList.toggle('active', on);
     if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  $$('.view').forEach(v => v.classList.remove('active'));
+  $$('#app .view').forEach(v => v.classList.remove('active'));
   $('#view-' + view)?.classList.add('active');
   $('#topbarTitle').textContent = VIEW_TITLES[view] || '';
   closeSidebar();
@@ -181,9 +187,9 @@ function showView(view) {
   if (view === 'doctor') loadScanHistory();
 }
 
-$$('.nav-item').forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.view)));
+$$('#app .nav-item').forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.view)));
 // Cards can deep-link into a view ("View Mavuno Score", "Full report").
-$$('[data-goto]').forEach(el => el.addEventListener('click', () => showView(el.dataset.goto)));
+$$('#app [data-goto]').forEach(el => el.addEventListener('click', () => showView(el.dataset.goto)));
 
 /* Sidebar toggle. One control, two jobs: on a phone the rail is an overlay
    drawer, so it slides in and out; on a desktop it collapses to an icon rail
@@ -321,11 +327,33 @@ async function loadDashboard() {
     chip.className = 'chip ' + (fresh ? 'chip-ok' : 'chip-warn');
   }
 
+  renderNotices(d.announcements || []);
+
   $('#adviceGrid').innerHTML = advisory.slice(firstRun ? 0 : 1).map(a => `
     <div class="advice">
       <div class="a-icon" aria-hidden="true">${ADVICE_EMOJI[a.icon] || '🌾'}</div>
       <div class="a-title">${esc(a.title)}</div>
       <div class="a-body">${esc(a.body)}</div>
+    </div>`).join('');
+}
+
+/* Notices published from the admin console. They sit at the head of the
+   dashboard because an urgent one — a disease alert, a price collapse — is
+   more time-critical than any metric below it. */
+const NOTICE_ICON = { info: 'ℹ️', advisory: '⚠️', urgent: '🚨' };
+
+function renderNotices(list) {
+  const slot = $('#dashNotices');
+  if (!slot) return;
+  slot.hidden = !list.length;
+  slot.innerHTML = list.map(n => `
+    <div class="notice-banner level-${esc(n.level)}" role="note">
+      <span class="nb-icon" aria-hidden="true">${NOTICE_ICON[n.level] || 'ℹ️'}</span>
+      <div>
+        <div class="nb-label">${n.level === 'urgent' ? 'Urgent notice' : n.level === 'advisory' ? 'Advisory' : 'From MavunoAI'}</div>
+        <div class="nb-title">${esc(n.title)}</div>
+        <div class="nb-body">${esc(n.body)}</div>
+      </div>
     </div>`).join('');
 }
 
@@ -799,7 +827,9 @@ function closeModal(id) {
 }
 
 document.addEventListener('keydown', e => {
-  const modal = $$('.modal-backdrop').find(m => !m.hidden);
+  // The last open one is the top-most: the admin console stacks a confirm
+  // dialog over the farmer file, and Escape must dismiss the confirm.
+  const modal = $$('.modal-backdrop').filter(m => !m.hidden).pop();
   if (!modal) return;
   if (e.key === 'Escape') { e.preventDefault(); closeModal(modal.id); return; }
   if (e.key !== 'Tab') return;
@@ -996,6 +1026,7 @@ const screens = {
   login: () => $('#loginScreen'),
   signup: () => $('#signupScreen'),
   app: () => $('#app'),
+  admin: () => $('#adminApp'),
 };
 
 function showScreen(name) {
@@ -1088,6 +1119,25 @@ function showApp() {
   history.replaceState({ screen: 'app' }, '', '/dashboard');
 }
 
+/* Administrators sign in through the same form and land in the console
+   instead of a farm record. startAdmin() lives in admin.js. */
+function showAdmin() {
+  showScreen('admin');
+  history.replaceState({ screen: 'admin' }, '', '/admin');
+}
+
+/* One entry point for both roles, so login, registration and boot all agree on
+   where a session belongs. */
+async function enterSession(role) {
+  if (role === 'admin') {
+    showAdmin();
+    await startAdmin();
+  } else {
+    showApp();
+    await startApp();
+  }
+}
+
 /* "Sign in" goes to the login card; "Get started" goes to registration. */
 ['#headerSignIn', '#ctaSignIn'].forEach(sel =>
   $(sel)?.addEventListener('click', () => showLogin()));
@@ -1113,13 +1163,14 @@ $('#loginForm').addEventListener('submit', async e => {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || 'Sign-in failed');
-    setSession(body.token, body.farmer);
+    setSession(body.token, body.farmer, body.role);
     // Clear the credentials before the screen goes away, so a shared handset
     // keeps neither the number nor the PIN. Registration does the same.
     e.target.reset();
-    showApp();
-    await startApp();
-    toast(`Karibu, ${body.farmer.name.split(' ')[0]}`);
+    await enterSession(body.role);
+    toast(body.role === 'admin'
+      ? `Signed in as administrator · ${body.farmer.name}`
+      : `Karibu, ${body.farmer.name.split(' ')[0]}`);
   } catch (err) {
     $('#loginError').textContent = err.message;
     $('#loginError').hidden = false;
@@ -1158,7 +1209,7 @@ $('#signupForm').addEventListener('submit', async e => {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || 'Could not create the account');
-    setSession(body.token, body.farmer);
+    setSession(body.token, body.farmer, body.role || 'farmer');
     // Wipe the details so the next person on a shared handset does not find
     // them waiting in the form.
     e.target.reset();
@@ -1189,7 +1240,7 @@ $('#topLogHarvest').addEventListener('click', () => openModal('harvestModal'));
 
 /* ------------------------------------------------ boot */
 function refreshActiveView() {
-  const view = $('.nav-item.active')?.dataset.view;
+  const view = $('#app .nav-item.active')?.dataset.view;
   if (view === 'markets') loadMarkets(state.marketCrop);
   else if (view === 'harvests') loadHarvests();
   else if (view === 'credit') loadCredit();
@@ -1201,20 +1252,25 @@ async function startApp() {
   refreshActiveView();
 }
 
-(async function boot() {
+/* Deferred to DOMContentLoaded so admin.js — loaded after this file — has
+   defined startAdmin() before a restored administrator session needs it. */
+document.addEventListener('DOMContentLoaded', async function boot() {
   // A token in sessionStorage survives a reload, so a signed-in farmer lands
-  // straight back on their dashboard instead of the marketing page.
+  // straight back on their dashboard instead of the marketing page. The server
+  // is asked which shell that is: the client never decides its own role.
   if (state.token) {
     try {
-      showApp();
-      await startApp();
+      const me = await api('/api/me');
+      state.farmer = me.farmer;
+      state.role = me.role;
+      await enterSession(me.role);
       return;
     } catch {
       clearSession();   // token rejected — fall through to the landing page
     }
   }
   showLanding();
-})();
+});
 
 /* Registering the service worker is what makes the offline claim real: the
    app shell keeps loading with no connection. */
