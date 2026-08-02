@@ -32,7 +32,11 @@ const SEEDED_FARMERS = [
   { phone: '0734567890', name: 'Mary Atieno', county: 'Kisumu' },
 ];
 
-let serverProc, throttledProc, token;
+let serverProc, throttledProc, token, adminToken;
+
+/* The seeded administrator: same login form, same PIN rules, different role. */
+const ADMIN_PHONE = '0700000000';
+const ADMIN_PIN = '2468';
 
 /* Dates relative to today, so the suite never rots the way the seeded price
    feed did. */
@@ -43,6 +47,21 @@ const daysAgo = n => {
 };
 
 const authHeaders = () => (token ? { Authorization: 'Bearer ' + token } : {});
+const adminHeaders = () => ({ Authorization: 'Bearer ' + adminToken });
+
+/* Admin calls carry the administrator's token rather than Amina's, so the two
+   roles can be exercised against the same running server. */
+const adminGet = p => fetch(BASE + p, { headers: adminHeaders() })
+  .then(r => r.json().then(body => ({ status: r.status, body })));
+
+const adminPost = (p, data) => fetch(BASE + p, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+  body: JSON.stringify(data ?? {}),
+}).then(r => r.json().then(body => ({ status: r.status, body })));
+
+const adminDelete = p => fetch(BASE + p, { method: 'DELETE', headers: adminHeaders() })
+  .then(r => r.json().then(body => ({ status: r.status, body })));
 
 const get = (p, base = BASE) => fetch(base + p, { headers: authHeaders() })
   .then(r => r.json().then(body => ({ status: r.status, body, headers: r.headers })));
@@ -86,6 +105,10 @@ before(async () => {
   const { status, body } = await postNoAuth('/api/auth/login', { phone: AMINA_PHONE, pin: DEMO_PIN });
   assert.equal(status, 200, 'demo farmer must be able to sign in');
   token = body.token;
+
+  const admin = await postNoAuth('/api/auth/login', { phone: ADMIN_PHONE, pin: ADMIN_PIN });
+  assert.equal(admin.status, 200, 'seeded administrator must be able to sign in');
+  adminToken = admin.body.token;
 });
 
 after(() => {
@@ -729,4 +752,295 @@ test('POST /api/harvests validation: yield exceeding ceiling is rejected with 40
 test('handles 50 concurrent dashboard requests without error', async () => {
   const results = await Promise.all(Array.from({ length: 50 }, () => get('/api/dashboard')));
   for (const r of results) assert.equal(r.status, 200);
+});
+
+/* ================================================== admin console */
+/* The administrator is an account row with role = 'admin', not a separate
+   system. These tests hold the boundary between the two roles: a farmer must
+   never reach platform-wide data, and an administrator must never be minted by
+   the public sign-up form. */
+
+test('admin: signs in through the same endpoint and is labelled as an admin', async () => {
+  const { status, body } = await postNoAuth('/api/auth/login', { phone: ADMIN_PHONE, pin: ADMIN_PIN });
+  assert.equal(status, 200);
+  assert.equal(body.role, 'admin');
+  assert.equal(body.farmer.role, 'admin');
+  assert.equal(body.farmer.pin_hash, undefined, 'PIN hash leaked to the client');
+});
+
+test('admin: /api/me reports the role the server holds, for each session', async () => {
+  const asAdmin = await adminGet('/api/me');
+  assert.equal(asAdmin.status, 200);
+  assert.equal(asAdmin.body.role, 'admin');
+
+  const asFarmer = await get('/api/me');
+  assert.equal(asFarmer.status, 200);
+  assert.equal(asFarmer.body.role, 'farmer');
+});
+
+test('admin: a farmer session is refused every admin endpoint', async () => {
+  for (const path of ['/api/admin/overview', '/api/admin/farmers', '/api/admin/loans',
+    '/api/admin/transactions', '/api/admin/audit', '/api/admin/system', '/api/admin/prices']) {
+    const { status, body } = await get(path);
+    assert.equal(status, 403, `${path} was not refused to a farmer`);
+    assert.equal(body.code, 'forbidden');
+  }
+  // Writes too, not just reads.
+  const write = await post('/api/admin/announcements', { title: 'Nope', body: 'Should never publish' });
+  assert.equal(write.status, 403);
+});
+
+test('admin: an unauthenticated caller is refused before the role check', async () => {
+  const res = await fetch(BASE + '/api/admin/overview');
+  assert.equal(res.status, 401);
+});
+
+test('admin: registration can never create an administrator', async () => {
+  const { status, body } = await postNoAuth('/api/auth/register', {
+    name: 'Sneaky Admin', phone: '0788111222', county: 'Nakuru',
+    farm_size_acres: 2, pin: '9911', role: 'admin', status: 'active',
+  });
+  assert.equal(status, 201);
+  assert.equal(body.role, 'farmer');
+  assert.equal(body.farmer.role, 'farmer');
+});
+
+test('admin: overview totals reconcile with the underlying ledgers', async () => {
+  const { status, body } = await adminGet('/api/admin/overview');
+  assert.equal(status, 200);
+  assert.ok(body.totals.farmers >= 3, 'seeded farmers missing from the count');
+  assert.equal(body.totals.farmers, body.totals.active + body.totals.suspended);
+  assert.equal(body.signups.length, 12, 'sign-up chart needs a full 12-month axis');
+  assert.equal(body.score_distribution.reduce((s, b) => s + b.count, 0), body.totals.rated);
+  assert.ok(body.credit.repayment_rate >= 0 && body.credit.repayment_rate <= 100);
+  assert.ok(Array.isArray(body.recent));
+  // The administrator is not a farmer and must not inflate platform numbers.
+  const { body: list } = await adminGet('/api/admin/farmers');
+  assert.ok(!list.farmers.some(f => f.role === 'admin'), 'admin account listed as a farmer');
+  assert.equal(list.total, body.totals.farmers);
+});
+
+test('admin: the farmer register searches, filters and scores', async () => {
+  const all = await adminGet('/api/admin/farmers?sort=score');
+  assert.equal(all.status, 200);
+  const scores = all.body.farmers.map(f => f.score);
+  assert.deepEqual(scores, [...scores].sort((a, b) => b - a), 'not sorted by score');
+  for (const f of all.body.farmers) {
+    assert.ok(f.score >= 0 && f.score <= 850);
+    assert.equal(typeof f.harvest_count, 'number');
+    assert.equal(f.pin_hash, undefined, 'PIN hash leaked into the register');
+  }
+  const search = await adminGet('/api/admin/farmers?q=amina');
+  assert.equal(search.body.farmers.length, 1);
+  assert.match(search.body.farmers[0].name, /Amina/);
+});
+
+test('admin: a farmer file returns that farmer’s complete record', async () => {
+  const { body: list } = await adminGet('/api/admin/farmers?q=amina');
+  const { status, body } = await adminGet('/api/admin/farmers/' + list.farmers[0].id);
+  assert.equal(status, 200);
+  assert.match(body.farmer.name, /Amina/);
+  assert.ok(body.harvests.length >= 7);
+  assert.equal(body.score.components.length, 5);
+  assert.ok(Array.isArray(body.loans) && Array.isArray(body.transactions));
+});
+
+test('admin: suspending an account blocks sign-in and existing sessions', async () => {
+  const john = await postNoAuth('/api/auth/login', { phone: '0723456789', pin: DEMO_PIN });
+  assert.equal(john.status, 200);
+  const johnToken = john.body.token;
+  const johnId = john.body.farmer.id;
+
+  const suspend = await adminPost(`/api/admin/farmers/${johnId}/status`, { status: 'suspended' });
+  assert.equal(suspend.status, 200);
+
+  const blocked = await postNoAuth('/api/auth/login', { phone: '0723456789', pin: DEMO_PIN });
+  assert.equal(blocked.status, 403);
+  assert.equal(blocked.body.code, 'suspended');
+
+  // The token issued before the suspension must stop working too.
+  const stale = await fetch(BASE + '/api/dashboard', { headers: { Authorization: 'Bearer ' + johnToken } });
+  assert.equal(stale.status, 403);
+
+  const restore = await adminPost(`/api/admin/farmers/${johnId}/status`, { status: 'active' });
+  assert.equal(restore.status, 200);
+  const back = await postNoAuth('/api/auth/login', { phone: '0723456789', pin: DEMO_PIN });
+  assert.equal(back.status, 200, 'restoring access did not work');
+});
+
+test('admin: administrators cannot be suspended or deleted from the console', async () => {
+  const { body: sys } = await adminGet('/api/admin/system');
+  const adminId = sys.administrators[0].id;
+  const suspend = await adminPost(`/api/admin/farmers/${adminId}/status`, { status: 'suspended' });
+  assert.equal(suspend.status, 403);
+  const remove = await adminDelete('/api/admin/farmers/' + adminId);
+  assert.equal(remove.status, 403);
+  const check = await adminGet('/api/me');
+  assert.equal(check.status, 200, 'the console locked itself out');
+});
+
+test('admin: a PIN reset issues a working one-time PIN', async () => {
+  const created = await postNoAuth('/api/auth/register', {
+    name: 'Reset Target', phone: '0788333444', county: 'Bomet', farm_size_acres: 1.2, pin: '5150',
+  });
+  assert.equal(created.status, 201);
+  const id = created.body.farmer.id;
+
+  const reset = await adminPost(`/api/admin/farmers/${id}/reset-pin`);
+  assert.equal(reset.status, 200);
+  assert.match(reset.body.temp_pin, /^\d{4}$/);
+
+  const oldPin = await postNoAuth('/api/auth/login', { phone: '0788333444', pin: '5150' });
+  assert.equal(oldPin.status, 401, 'the old PIN still works after a reset');
+  const newPin = await postNoAuth('/api/auth/login', { phone: '0788333444', pin: reset.body.temp_pin });
+  assert.equal(newPin.status, 200, 'the issued PIN does not sign in');
+});
+
+test('admin: deleting an account removes the farmer and their rows', async () => {
+  const created = await postNoAuth('/api/auth/register', {
+    name: 'Delete Target', phone: '0788555666', county: 'Meru', farm_size_acres: 1, pin: '2200',
+  });
+  const id = created.body.farmer.id;
+  const del = await adminDelete('/api/admin/farmers/' + id);
+  assert.equal(del.status, 200);
+  assert.equal(del.body.deleted, true);
+
+  const gone = await adminGet('/api/admin/farmers/' + id);
+  assert.equal(gone.status, 404);
+  const cannotSignIn = await postNoAuth('/api/auth/login', { phone: '0788555666', pin: '2200' });
+  assert.equal(cannotSignIn.status, 401);
+});
+
+test('admin: the credit book lists every facility with a repayment total', async () => {
+  const { status, body } = await adminGet('/api/admin/loans');
+  assert.equal(status, 200);
+  assert.ok(body.loans.length >= 1);
+  for (const l of body.loans) {
+    assert.ok(l.farmer_name, 'facility not joined to its farmer');
+    assert.ok(l.total_due >= l.amount, 'total due must include the service fee');
+    assert.equal(typeof l.overdue, 'boolean');
+  }
+});
+
+test('admin: changing a loan status rescores the farmer and is refused when unknown', async () => {
+  const { body } = await adminGet('/api/admin/loans?status=approved');
+  const loan = body.loans[0];
+  const marked = await adminPost(`/api/admin/loans/${loan.id}/status`, { status: 'repaid' });
+  assert.equal(marked.status, 200);
+  assert.equal(marked.body.status, 'repaid');
+  assert.ok(marked.body.score > 0, 'the farmer was not rescored');
+
+  const junk = await adminPost(`/api/admin/loans/${loan.id}/status`, { status: 'forgiven-by-vibes' });
+  assert.equal(junk.status, 400);
+});
+
+test('admin: a price override lands in the feed farmers read', async () => {
+  const set = await adminPost('/api/admin/prices', {
+    crop: 'cabbage', market: 'Nakuru Top', price_per_kg: 37.5,
+  });
+  assert.equal(set.status, 200);
+
+  const { body } = await get('/api/prices?crop=cabbage');
+  const series = body.series['Nakuru Top'];
+  assert.equal(series[series.length - 1].price_per_kg, 37.5, 'the override never reached the price series');
+
+  const bad = await adminPost('/api/admin/prices', { crop: 'unobtainium', market: 'Nakuru Top', price_per_kg: 5 });
+  assert.equal(bad.status, 400);
+});
+
+test('admin: an announcement reaches the targeted farmer dashboard, and pausing withdraws it', async () => {
+  const published = await adminPost('/api/admin/announcements', {
+    title: 'Armyworm alert', body: 'Scout maize funnels at dawn twice this week.',
+    level: 'urgent', county: 'Uasin Gishu',
+  });
+  assert.equal(published.status, 201);
+  const id = published.body.id;
+
+  // Amina farms in Uasin Gishu, so she is in the audience.
+  const dash = await get('/api/dashboard');
+  assert.ok(dash.body.announcements.some(a => a.id === id), 'the notice never reached the dashboard');
+
+  const paused = await adminPost(`/api/admin/announcements/${id}/active`, { active: false });
+  assert.equal(paused.status, 200);
+  const after = await get('/api/dashboard');
+  assert.ok(!after.body.announcements.some(a => a.id === id), 'a paused notice is still being served');
+
+  const removed = await adminDelete('/api/admin/announcements/' + id);
+  assert.equal(removed.status, 200);
+});
+
+test('admin: an announcement addressed to one county is not shown to another', async () => {
+  const published = await adminPost('/api/admin/announcements', {
+    title: 'Kisumu flooding advisory', body: 'Delay transplanting until the water recedes.',
+    level: 'advisory', county: 'Kisumu',
+  });
+  const dash = await get('/api/dashboard');   // Amina is in Uasin Gishu
+  assert.ok(!dash.body.announcements.some(a => a.id === published.body.id),
+    'a county notice leaked to a farmer elsewhere');
+  await adminDelete('/api/admin/announcements/' + published.body.id);
+});
+
+test('admin: announcement input is validated, not stored raw', async () => {
+  const markup = await adminPost('/api/admin/announcements', {
+    title: '<img src=x onerror=alert(1)>', body: 'ok', level: 'info',
+  });
+  assert.equal(markup.status, 400);
+  const level = await adminPost('/api/admin/announcements', {
+    title: 'Fine', body: 'Fine', level: 'apocalyptic',
+  });
+  assert.equal(level.status, 400);
+});
+
+test('admin: every write is recorded in the audit trail', async () => {
+  const { status, body } = await adminGet('/api/admin/audit');
+  assert.equal(status, 200);
+  assert.ok(body.length > 0, 'the audit trail is empty after a session of writes');
+  const actions = new Set(body.map(a => a.action));
+  for (const expected of ['farmer.suspend', 'farmer.restore', 'farmer.reset_pin',
+    'farmer.delete', 'loan.status', 'price.override', 'announcement.publish']) {
+    assert.ok(actions.has(expected), `${expected} was not audited`);
+  }
+  for (const entry of body) {
+    assert.ok(entry.admin_id, 'an audit row has no administrator against it');
+    assert.ok(entry.created_at);
+  }
+});
+
+test('admin: system status reports the rails the server actually enforces', async () => {
+  const { status, body } = await adminGet('/api/admin/system');
+  assert.equal(status, 200);
+  assert.equal(body.policy.daily_disbursement_cap, 150000);
+  assert.equal(body.policy.max_farm_acres, 500);
+  assert.ok(body.database.tables.some(t => t.table === 'farmers' && t.rows > 0));
+  assert.equal(body.administrators.length, 1);
+  assert.equal(body.administrators[0].pin_hash, undefined);
+});
+
+test('admin: the payments ledger and crop-health views answer platform-wide', async () => {
+  const pay = await adminGet('/api/admin/transactions');
+  assert.equal(pay.status, 200);
+  assert.ok(Array.isArray(pay.body.transactions) && Array.isArray(pay.body.totals));
+
+  const health = await adminGet('/api/admin/diagnoses');
+  assert.equal(health.status, 200);
+  for (const key of ['recent', 'by_disease', 'by_severity', 'by_county']) {
+    assert.ok(Array.isArray(health.body[key]), `${key} missing from crop health`);
+  }
+});
+
+test('admin: an unknown admin endpoint returns JSON 404, not the SPA shell', async () => {
+  const { status, body } = await adminGet('/api/admin/nonexistent');
+  assert.equal(status, 404);
+  assert.ok(body.error);
+});
+
+test('the admin console ships with the shell and is wired to the same login', async () => {
+  const html = await fetch(BASE + '/').then(r => r.text());
+  const js = await fetch(BASE + '/js/admin.js').then(r => r.text());
+  assert.match(html, /id="adminApp"/, 'admin shell missing from index.html');
+  assert.match(html, /data-admin-view="overview"/, 'admin navigation missing');
+  assert.match(html, /id="dashNotices"/, 'farmer announcement slot missing');
+  assert.match(js, /startAdmin/, 'admin entry point missing');
+  // One door: there is no separate admin login form to find or brute-force.
+  assert.ok(!/id="adminLoginForm"/.test(html), 'a second login form appeared');
 });

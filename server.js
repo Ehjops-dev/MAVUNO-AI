@@ -112,6 +112,30 @@ db.exec(`
     price_per_kg REAL NOT NULL,
     PRIMARY KEY (crop, market, day)
   );
+  /* Every state-changing thing an administrator does lands here. No foreign
+     key on admin_id: the trail has to outlive the account that wrote it. */
+  CREATE TABLE IF NOT EXISTS admin_actions (
+    id TEXT PRIMARY KEY,
+    admin_id TEXT NOT NULL,
+    admin_name TEXT,
+    action TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    target_label TEXT,
+    detail TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  /* Advisories an administrator broadcasts to farmers. county NULL = everyone. */
+  CREATE TABLE IF NOT EXISTS announcements (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    level TEXT NOT NULL DEFAULT 'info',
+    county TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
   CREATE INDEX IF NOT EXISTS idx_harvests_farmer ON harvests(farmer_id, harvest_date DESC);
   CREATE INDEX IF NOT EXISTS idx_loans_farmer ON loans(farmer_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_diagnoses_farmer ON diagnoses(farmer_id, created_at DESC);
@@ -119,6 +143,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tx_farmer ON payment_transactions(farmer_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_tx_reference ON payment_transactions(external_reference);
   CREATE INDEX IF NOT EXISTS idx_prices_crop_day ON prices(crop, day);
+  CREATE INDEX IF NOT EXISTS idx_admin_actions_created ON admin_actions(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(active, created_at DESC);
 `);
 
 /* Databases created before these columns existed still need them. */
@@ -130,6 +156,10 @@ function addColumnIfMissing(table, column, definition) {
 }
 addColumnIfMissing('farmers', 'pin_hash', 'TEXT');
 addColumnIfMissing('payment_transactions', 'direction', "TEXT NOT NULL DEFAULT 'disbursement'");
+/* One accounts table, two kinds of account. Everything a farmer sees is scoped
+   to their own id; role = 'admin' is what unlocks the platform-wide views. */
+addColumnIfMissing('farmers', 'role', "TEXT NOT NULL DEFAULT 'farmer'");
+addColumnIfMissing('farmers', 'status', "TEXT NOT NULL DEFAULT 'active'");
 
 /* Orphan rows can only exist in databases written before foreign keys were
    enforced — they are what made loans point at a farmer nobody could see. */
@@ -279,8 +309,28 @@ function seedFarmers() {
   return AMINA_ID;
 }
 
+/* The platform administrator. Same accounts table, same login form, same PIN
+   rules — only the role differs, and the role is what the API checks. There is
+   deliberately no way to register one from the public sign-up form: an admin
+   exists because the operator seeded it, or because another admin promoted a
+   farmer from the console. */
+const ADMIN_ID = 'admin-mavuno-hq-0001';
+const ADMIN_PIN = process.env.ADMIN_PIN || '2468';
+const ADMIN_PHONE = process.env.ADMIN_PHONE || '+254 700 000 000';
+
+function seedAdmin() {
+  const existing = db.prepare("SELECT id FROM farmers WHERE role = 'admin' ORDER BY joined_at LIMIT 1").get();
+  if (existing) return existing.id;
+  db.prepare(`INSERT OR IGNORE INTO farmers
+    (id, name, phone, county, farm_size_acres, joined_at, pin_hash, role, status)
+    VALUES (?,?,?,?,?,?,?,'admin','active')`)
+    .run(ADMIN_ID, 'MavunoAI Administrator', ADMIN_PHONE, 'HQ · Nairobi', 0, dayString(0), hashPin(ADMIN_PIN));
+  return ADMIN_ID;
+}
+
 seedPrices();
 const DEMO_FARMER_ID = seedFarmers();
+const PLATFORM_ADMIN_ID = seedAdmin();
 
 /* --------------------------------------------------------------- weather */
 /* Simulated forecast feed — swap generateWeather() for a live OpenWeather
@@ -802,8 +852,24 @@ async function handleApi(req, res, url) {
       // Same message either way — do not reveal which phones are registered.
       return json(res, 401, { error: 'Incorrect phone number or PIN' });
     }
+    // Checked after the PIN, so a suspended account is not disclosed to
+    // someone guessing numbers.
+    if (farmer.status === 'suspended') {
+      return json(res, 403, {
+        error: 'This account is suspended. Contact MavunoAI support to restore access.',
+        code: 'suspended',
+      });
+    }
     loginFailures.delete(phone);
-    return json(res, 200, { token: signToken(farmer.id), expires_in_s: SESSION_TTL_MS / 1000, farmer: publicFarmer(farmer) });
+    // role travels in the body, not the token: it is read from the row on
+    // every request, so a demotion takes effect immediately rather than at
+    // the end of a two-hour session.
+    return json(res, 200, {
+      token: signToken(farmer.id),
+      expires_in_s: SESSION_TTL_MS / 1000,
+      role: farmer.role || 'farmer',
+      farmer: publicFarmer(farmer),
+    });
   }
 
   /* Self-registration. A new farmer starts with an empty ledger, which the
@@ -852,6 +918,7 @@ async function handleApi(req, res, url) {
     return json(res, 201, {
       token: signToken(id),
       expires_in_s: SESSION_TTL_MS / 1000,
+      role: 'farmer',   // self-registration never mints an administrator
       farmer: publicFarmer(farmer),
     });
   }
@@ -902,12 +969,37 @@ async function handleApi(req, res, url) {
     }
     // A token can only ever act as the farmer it was issued for — the old
     // `x-farmer-id` header let any client claim any identity.
-    if (!db.prepare('SELECT 1 FROM farmers WHERE id = ?').get(authedId)) {
+    const account = db.prepare('SELECT id, name, role, status FROM farmers WHERE id = ?').get(authedId);
+    if (!account) {
       return json(res, 401, { error: 'Session no longer valid', code: 'unauthenticated' });
     }
+    // Suspending an account has to cut off the sessions it already has, not
+    // just future sign-ins.
+    if (account.status === 'suspended') {
+      return json(res, 403, { error: 'This account is suspended.', code: 'suspended' });
+    }
     req.farmerId = authedId;
+    req.account = account;
   }
   const farmerId = req.farmerId;
+
+  /* Who am I? Lets the client restore the right shell after a reload without
+     guessing from a value it stored itself. */
+  if (route === 'GET /api/me') {
+    return json(res, 200, {
+      role: req.account.role || 'farmer',
+      farmer: publicFarmer(db.prepare('SELECT * FROM farmers WHERE id = ?').get(farmerId)),
+    });
+  }
+
+  /* Everything under /api/admin/ is gated on the role stored against the
+     account, re-read on every request. */
+  if (url.pathname.startsWith('/api/admin/')) {
+    if (req.account.role !== 'admin') {
+      return json(res, 403, { error: 'Administrator access required', code: 'forbidden' });
+    }
+    return handleAdminApi(req, res, url);
+  }
 
   if (req.method === 'GET' && url.pathname === '/api/dashboard') {
     const farmer = publicFarmer(db.prepare('SELECT * FROM farmers WHERE id = ?').get(farmerId));
@@ -931,6 +1023,12 @@ async function handleApi(req, res, url) {
       prices: latestPrices,
       prices_as_of: db.prepare('SELECT MAX(day) AS day FROM prices').get().day,
       advisory: buildAdvisory(),
+      // Notices an administrator has broadcast, narrowed to this farmer's
+      // county plus the platform-wide ones.
+      announcements: db.prepare(
+        `SELECT id, title, body, level, created_at FROM announcements
+         WHERE active = 1 AND (county IS NULL OR county = ?)
+         ORDER BY created_at DESC LIMIT 3`).all(farmer?.county ?? null),
     });
   }
 
@@ -1128,6 +1226,480 @@ async function handleApi(req, res, url) {
   return json(res, 404, { error: 'Not found' });
 }
 
+/* ================================================================== admin */
+/* Everything below answers only to a session whose account row carries
+   role = 'admin'; handleApi() has already proved that before dispatching
+   here. Admin reads are platform-wide by design — that is the whole point of
+   the console — but every write is recorded in admin_actions with the
+   administrator who made it. */
+
+function audit(req, action, { targetType = null, targetId = null, targetLabel = null, detail = null } = {}) {
+  db.prepare(`INSERT INTO admin_actions
+    (id, admin_id, admin_name, action, target_type, target_id, target_label, detail)
+    VALUES (?,?,?,?,?,?,?,?)`)
+    .run(crypto.randomUUID(), req.account.id, req.account.name, action,
+      targetType, targetId, targetLabel, detail ? JSON.stringify(detail) : null);
+}
+
+/* One row per farmer with the aggregates the console lists: harvest count,
+   tonnage, revenue and borrowing. Correlated subqueries rather than five
+   joins, so a farmer with no harvests still appears with zeros. */
+const FARMER_ROW_SQL = `
+  SELECT f.id, f.name, f.phone, f.county, f.farm_size_acres, f.joined_at, f.role, f.status,
+         (SELECT COUNT(*) FROM harvests h WHERE h.farmer_id = f.id) AS harvest_count,
+         (SELECT COALESCE(SUM(h.quantity_kg), 0) FROM harvests h WHERE h.farmer_id = f.id) AS total_kg,
+         (SELECT COALESCE(SUM(h.quantity_kg * COALESCE(h.sold_price_per_kg, 0)), 0)
+            FROM harvests h WHERE h.farmer_id = f.id) AS revenue,
+         (SELECT COUNT(*) FROM loans l WHERE l.farmer_id = f.id) AS loan_count,
+         (SELECT COUNT(*) FROM loans l WHERE l.farmer_id = f.id AND l.status = 'approved') AS active_loans,
+         (SELECT COALESCE(SUM(l.amount), 0) FROM loans l WHERE l.farmer_id = f.id
+            AND l.status IN ('approved','repaid')) AS borrowed,
+         (SELECT COUNT(*) FROM diagnoses d WHERE d.farmer_id = f.id) AS scan_count
+  FROM farmers f`;
+
+const withScore = row => {
+  const { score, tier } = computeScore(row.id);
+  return { ...row, score, tier };
+};
+
+/* A month key list ending on the current month, so a sparse signup history
+   still draws a continuous 12-month axis instead of three lonely bars. */
+function monthSeries(count, rows) {
+  const found = new Map(rows.map(r => [r.month, r.count]));
+  const out = [];
+  const d = new Date();
+  d.setUTCDate(1);
+  for (let i = count - 1; i >= 0; i--) {
+    const m = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1));
+    const key = m.toISOString().slice(0, 7);
+    out.push({ month: key, count: found.get(key) || 0 });
+  }
+  return out;
+}
+
+const SCORE_BANDS = [
+  { band: '300–479', label: 'Building History', min: 300, max: 479 },
+  { band: '480–599', label: 'Seedling', min: 480, max: 599 },
+  { band: '600–699', label: 'Growing Strong', min: 600, max: 699 },
+  { band: '700–850', label: 'Prime Harvester', min: 700, max: 850 },
+];
+
+function adminOverview() {
+  const farmers = db.prepare(
+    "SELECT id, county, status, joined_at FROM farmers WHERE role = 'farmer'").all();
+  const scored = farmers.map(f => ({ ...f, ...computeScore(f.id) }));
+  const rated = scored.filter(f => f.score > 0);
+
+  const harvestTotals = db.prepare(
+    `SELECT COUNT(*) AS entries, COALESCE(SUM(quantity_kg), 0) AS kg,
+            COALESCE(SUM(quantity_kg * COALESCE(sold_price_per_kg, 0)), 0) AS revenue
+     FROM harvests`).get();
+
+  const loanRows = db.prepare(
+    'SELECT status, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS value FROM loans GROUP BY status').all();
+  const byStatus = Object.fromEntries(loanRows.map(r => [r.status, r]));
+  const pick = (s, k) => byStatus[s]?.[k] || 0;
+
+  // A facility still open past its own term is the closest thing this ledger
+  // has to an arrears signal — surface it rather than a flattering total.
+  const overdue = db.prepare(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS value FROM loans
+     WHERE status = 'approved' AND julianday('now') - julianday(created_at) > term_months * 30`).get();
+
+  const disbursed30 = db.prepare(
+    `SELECT COALESCE(SUM(amount), 0) AS value, COUNT(*) AS n FROM loans
+     WHERE status IN ('approved','repaid') AND created_at >= datetime('now','-30 day')`).get();
+
+  const settled = pick('repaid', 'n') + pick('approved', 'n');
+  const recent = [
+    ...db.prepare(
+      `SELECT h.created_at AS at, f.name AS who, h.crop AS a, h.quantity_kg AS b
+       FROM harvests h JOIN farmers f ON f.id = h.farmer_id ORDER BY h.created_at DESC LIMIT 8`)
+      .all().map(r => ({ type: 'harvest', at: r.at, who: r.who, what: `${r.a} · ${Math.round(r.b).toLocaleString()} kg` })),
+    ...db.prepare(
+      `SELECT l.created_at AS at, f.name AS who, l.purpose AS a, l.amount AS b, l.status AS c
+       FROM loans l JOIN farmers f ON f.id = l.farmer_id ORDER BY l.created_at DESC LIMIT 8`)
+      .all().map(r => ({ type: 'loan', at: r.at, who: r.who, what: `${r.a} · KES ${Math.round(r.b).toLocaleString()} (${r.c})` })),
+    ...db.prepare(
+      `SELECT d.created_at AS at, f.name AS who, d.disease AS a, d.crop AS b
+       FROM diagnoses d JOIN farmers f ON f.id = d.farmer_id ORDER BY d.created_at DESC LIMIT 8`)
+      .all().map(r => ({ type: 'scan', at: r.at, who: r.who, what: `${r.a || 'scan'} · ${r.b || '—'}` })),
+  ].sort((x, y) => String(y.at).localeCompare(String(x.at))).slice(0, 12);
+
+  const priceDay = db.prepare('SELECT MAX(day) AS day FROM prices').get().day;
+
+  return {
+    totals: {
+      farmers: farmers.length,
+      active: farmers.filter(f => f.status !== 'suspended').length,
+      suspended: farmers.filter(f => f.status === 'suspended').length,
+      new_30d: db.prepare(
+        "SELECT COUNT(*) AS n FROM farmers WHERE role = 'farmer' AND joined_at >= date('now','-30 day')").get().n,
+      harvests: harvestTotals.entries,
+      tonnes: Math.round((harvestTotals.kg / 1000) * 10) / 10,
+      revenue: Math.round(harvestTotals.revenue),
+      scans: db.prepare('SELECT COUNT(*) AS n FROM diagnoses').get().n,
+      avg_score: rated.length ? Math.round(rated.reduce((s, f) => s + f.score, 0) / rated.length) : 0,
+      rated: rated.length,
+    },
+    credit: {
+      active_count: pick('approved', 'n'),
+      active_value: Math.round(pick('approved', 'value')),
+      repaid_count: pick('repaid', 'n'),
+      repaid_value: Math.round(pick('repaid', 'value')),
+      failed_count: pick('disbursement_failed', 'n') + pick('cancelled', 'n') + pick('written_off', 'n'),
+      written_off_value: Math.round(pick('written_off', 'value')),
+      overdue_count: overdue.n,
+      overdue_value: Math.round(overdue.value),
+      disbursed_30d: Math.round(disbursed30.value),
+      disbursed_30d_count: disbursed30.n,
+      // Share of everything actually put in a farmer's hands that has come back.
+      repayment_rate: settled ? Math.round((pick('repaid', 'n') / settled) * 100) : 0,
+    },
+    score_distribution: SCORE_BANDS.map(b => ({
+      ...b, count: rated.filter(f => f.score >= b.min && f.score <= b.max).length,
+    })),
+    signups: monthSeries(12, db.prepare(
+      `SELECT substr(joined_at, 1, 7) AS month, COUNT(*) AS count FROM farmers
+       WHERE role = 'farmer' AND joined_at IS NOT NULL GROUP BY month`).all()),
+    counties: db.prepare(
+      `SELECT f.county AS county, COUNT(DISTINCT f.id) AS farmers,
+              COALESCE(SUM(h.quantity_kg), 0) AS kg
+       FROM farmers f LEFT JOIN harvests h ON h.farmer_id = f.id
+       WHERE f.role = 'farmer' GROUP BY f.county ORDER BY farmers DESC, kg DESC LIMIT 8`).all(),
+    crops: db.prepare(
+      `SELECT crop, COUNT(*) AS entries, COALESCE(SUM(quantity_kg), 0) AS kg,
+              COALESCE(SUM(quantity_kg * COALESCE(sold_price_per_kg, 0)), 0) AS revenue
+       FROM harvests GROUP BY crop ORDER BY kg DESC`).all(),
+    recent,
+    price_feed: { through: priceDay, fresh: priceDay === dayString(0) },
+    payhero: getPayHeroConfigStatus(),
+    announcements_active: db.prepare('SELECT COUNT(*) AS n FROM announcements WHERE active = 1').get().n,
+  };
+}
+
+const LOAN_STATUSES = ['approved', 'repaid', 'written_off', 'cancelled', 'disbursement_failed'];
+const ANNOUNCEMENT_LEVELS = ['info', 'advisory', 'urgent'];
+
+async function handleAdminApi(req, res, url) {
+  // /api/admin/farmers/<id>/status → resource "farmers", id, action "status"
+  const parts = url.pathname.split('/').filter(Boolean);
+  const resource = parts[2] || '';
+  const id = parts[3] ? decodeURIComponent(parts[3]) : null;
+  const action = parts[4] || null;
+  const method = req.method;
+  const limitParam = (fallback, max = 500) =>
+    Math.min(max, Math.max(1, Number(url.searchParams.get('limit')) || fallback));
+
+  /* ---------------------------------------------------------- overview */
+  if (method === 'GET' && resource === 'overview' && !id) {
+    return json(res, 200, adminOverview());
+  }
+
+  /* ----------------------------------------------------------- farmers */
+  if (method === 'GET' && resource === 'farmers' && !id) {
+    const q = String(url.searchParams.get('q') || '').trim().toLowerCase();
+    const status = String(url.searchParams.get('status') || 'all');
+    const sort = String(url.searchParams.get('sort') || 'score');
+
+    let rows = db.prepare(`${FARMER_ROW_SQL} WHERE f.role = 'farmer'`).all().map(withScore);
+    if (q) {
+      rows = rows.filter(r =>
+        r.name.toLowerCase().includes(q) ||
+        String(r.county || '').toLowerCase().includes(q) ||
+        normalizeKenyanPhone(r.phone).includes(normalizeKenyanPhone(q) || q));
+    }
+    if (status !== 'all') rows = rows.filter(r => (r.status || 'active') === status);
+
+    const sorters = {
+      score: (a, b) => b.score - a.score,
+      name: (a, b) => a.name.localeCompare(b.name),
+      joined: (a, b) => String(b.joined_at).localeCompare(String(a.joined_at)),
+      revenue: (a, b) => b.revenue - a.revenue,
+      borrowed: (a, b) => b.borrowed - a.borrowed,
+    };
+    rows.sort(sorters[sort] || sorters.score);
+    return json(res, 200, { farmers: rows.slice(0, limitParam(200)), total: rows.length });
+  }
+
+  if (method === 'GET' && resource === 'farmers' && id && !action) {
+    const farmer = db.prepare(`${FARMER_ROW_SQL} WHERE f.id = ?`).get(id);
+    if (!farmer) return json(res, 404, { error: 'No such account' });
+    return json(res, 200, {
+      farmer: withScore(farmer),
+      score: computeScore(id),
+      harvests: db.prepare('SELECT * FROM harvests WHERE farmer_id = ? ORDER BY harvest_date DESC').all(id),
+      loans: db.prepare('SELECT * FROM loans WHERE farmer_id = ? ORDER BY created_at DESC').all(id),
+      diagnoses: db.prepare('SELECT * FROM diagnoses WHERE farmer_id = ? ORDER BY created_at DESC LIMIT 20').all(id),
+      transactions: db.prepare(
+        'SELECT * FROM payment_transactions WHERE farmer_id = ? ORDER BY created_at DESC LIMIT 20').all(id),
+    });
+  }
+
+  /* Suspend / restore. Administrators are out of scope on purpose: locking the
+     console out of itself is not a mistake worth allowing at 2 a.m. */
+  if (method === 'POST' && resource === 'farmers' && id && action === 'status') {
+    const b = await readBody(req);
+    const status = requireOneOf(b.status, ['active', 'suspended'], 'status');
+    const target = db.prepare('SELECT id, name, role, status FROM farmers WHERE id = ?').get(id);
+    if (!target) return json(res, 404, { error: 'No such account' });
+    if (target.role === 'admin') {
+      return json(res, 403, { error: 'Administrator accounts cannot be suspended from the console' });
+    }
+    db.prepare('UPDATE farmers SET status = ? WHERE id = ?').run(status, id);
+    audit(req, status === 'suspended' ? 'farmer.suspend' : 'farmer.restore',
+      { targetType: 'farmer', targetId: id, targetLabel: target.name, detail: { from: target.status, to: status } });
+    return json(res, 200, { id, status });
+  }
+
+  /* Issues a fresh random PIN and hands it back exactly once — the hash is all
+     that is stored, so there is no way to read it again afterwards. */
+  if (method === 'POST' && resource === 'farmers' && id && action === 'reset-pin') {
+    const target = db.prepare('SELECT id, name, role FROM farmers WHERE id = ?').get(id);
+    if (!target) return json(res, 404, { error: 'No such account' });
+    if (target.role === 'admin' && target.id !== req.account.id) {
+      return json(res, 403, { error: 'You cannot reset another administrator’s PIN' });
+    }
+    const tempPin = String(crypto.randomInt(1000, 10000));
+    db.prepare('UPDATE farmers SET pin_hash = ? WHERE id = ?').run(hashPin(tempPin), id);
+    loginFailures.delete(normalizeKenyanPhone(
+      db.prepare('SELECT phone FROM farmers WHERE id = ?').get(id)?.phone));
+    audit(req, 'farmer.reset_pin', { targetType: 'farmer', targetId: id, targetLabel: target.name });
+    return json(res, 200, { id, temp_pin: tempPin, note: 'Read this to the farmer once — it is not stored in clear.' });
+  }
+
+  if (method === 'DELETE' && resource === 'farmers' && id && !action) {
+    const target = db.prepare('SELECT id, name, role FROM farmers WHERE id = ?').get(id);
+    if (!target) return json(res, 404, { error: 'No such account' });
+    if (target.role === 'admin') return json(res, 403, { error: 'Administrator accounts cannot be deleted here' });
+    // Harvests, loans and diagnoses cascade; the payments ledger has no foreign
+    // key precisely so it survives, so clear it explicitly.
+    db.prepare('DELETE FROM payment_transactions WHERE farmer_id = ?').run(id);
+    db.prepare('DELETE FROM farmers WHERE id = ?').run(id);
+    invalidateScore(id);
+    audit(req, 'farmer.delete', { targetType: 'farmer', targetId: id, targetLabel: target.name });
+    return json(res, 200, { id, deleted: true });
+  }
+
+  /* ------------------------------------------------------------- loans */
+  if (method === 'GET' && resource === 'loans' && !id) {
+    const status = String(url.searchParams.get('status') || 'all');
+    const rows = db.prepare(`
+      SELECT l.*, f.name AS farmer_name, f.phone AS farmer_phone, f.county AS farmer_county,
+             pt.status AS payment_status, pt.provider AS payment_provider,
+             pt.external_reference AS payment_reference, pt.phone_number AS payment_phone
+      FROM loans l
+      JOIN farmers f ON f.id = l.farmer_id
+      LEFT JOIN payment_transactions pt ON pt.id = (
+        SELECT id FROM payment_transactions
+        WHERE loan_id = l.id AND direction = 'disbursement'
+        ORDER BY created_at DESC LIMIT 1)
+      ORDER BY l.created_at DESC`).all()
+      .map(l => ({
+        ...l,
+        total_due: Math.round(l.amount * (1 + (l.rate_pct_month / 100) * l.term_months)),
+        days_open: Math.floor((Date.now() - Date.parse(l.created_at + 'Z')) / 86_400_000),
+      }))
+      .map(l => ({ ...l, overdue: l.status === 'approved' && l.days_open > l.term_months * 30 }));
+    return json(res, 200, {
+      loans: status === 'all' ? rows : rows.filter(l => l.status === status),
+      counts: LOAN_STATUSES.map(s => ({ status: s, n: rows.filter(l => l.status === s).length })),
+      total: rows.length,
+    });
+  }
+
+  if (method === 'POST' && resource === 'loans' && id && action === 'status') {
+    const b = await readBody(req);
+    const status = requireOneOf(b.status, LOAN_STATUSES, 'status');
+    const loan = db.prepare(
+      'SELECT l.*, f.name AS farmer_name FROM loans l JOIN farmers f ON f.id = l.farmer_id WHERE l.id = ?').get(id);
+    if (!loan) return json(res, 404, { error: 'No such facility' });
+    db.prepare('UPDATE loans SET status = ? WHERE id = ?').run(status, id);
+    invalidateScore(loan.farmer_id);
+    audit(req, 'loan.status', {
+      targetType: 'loan', targetId: id, targetLabel: `${loan.purpose} · ${loan.farmer_name}`,
+      detail: { from: loan.status, to: status, amount: loan.amount },
+    });
+    return json(res, 200, { id, status, score: computeScore(loan.farmer_id).score });
+  }
+
+  /* ------------------------------------------------------- payments */
+  if (method === 'GET' && resource === 'transactions' && !id) {
+    const direction = String(url.searchParams.get('direction') || 'all');
+    const rows = db.prepare(`
+      SELECT pt.id, pt.loan_id, pt.farmer_id, pt.provider, pt.direction, pt.external_reference,
+             pt.phone_number, pt.amount, pt.status, pt.merchant_reference, pt.created_at,
+             f.name AS farmer_name
+      FROM payment_transactions pt
+      LEFT JOIN farmers f ON f.id = pt.farmer_id
+      ORDER BY pt.created_at DESC LIMIT ?`).all(limitParam(150));
+    const totals = db.prepare(
+      `SELECT direction, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS value
+       FROM payment_transactions GROUP BY direction`).all();
+    return json(res, 200, {
+      transactions: direction === 'all' ? rows : rows.filter(r => r.direction === direction),
+      totals,
+      mode: getPayHeroConfigStatus().mode,
+    });
+  }
+
+  /* --------------------------------------------------- crop health */
+  if (method === 'GET' && resource === 'diagnoses' && !id) {
+    return json(res, 200, {
+      recent: db.prepare(`
+        SELECT d.*, f.name AS farmer_name, f.county AS county
+        FROM diagnoses d LEFT JOIN farmers f ON f.id = d.farmer_id
+        ORDER BY d.created_at DESC LIMIT ?`).all(limitParam(60)),
+      by_disease: db.prepare(`
+        SELECT d.disease, d.crop, COUNT(*) AS n, AVG(d.confidence) AS confidence,
+               (SELECT d2.severity FROM diagnoses d2
+                 WHERE d2.disease = d.disease AND d2.crop IS d.crop
+                 ORDER BY d2.created_at DESC LIMIT 1) AS severity
+        FROM diagnoses d WHERE d.disease IS NOT NULL
+        GROUP BY d.disease, d.crop ORDER BY n DESC LIMIT 12`).all(),
+      by_severity: db.prepare(
+        'SELECT COALESCE(severity, \'unknown\') AS severity, COUNT(*) AS n FROM diagnoses GROUP BY severity').all(),
+      by_county: db.prepare(`
+        SELECT COALESCE(f.county, 'Unknown') AS county, COUNT(*) AS n
+        FROM diagnoses d LEFT JOIN farmers f ON f.id = d.farmer_id
+        GROUP BY county ORDER BY n DESC LIMIT 8`).all(),
+    });
+  }
+
+  /* ------------------------------------------------------------ prices */
+  if (method === 'GET' && resource === 'prices' && !id) {
+    const today = db.prepare('SELECT MAX(day) AS day FROM prices').get().day;
+    const rows = db.prepare('SELECT crop, market, price_per_kg FROM prices WHERE day = ?').all(today);
+    const week = db.prepare(
+      `SELECT crop, market, AVG(price_per_kg) AS avg FROM prices
+       WHERE day >= date('now','-7 day') GROUP BY crop, market`).all();
+    const avgOf = (c, m) => week.find(w => w.crop === c && w.market === m)?.avg ?? null;
+    return json(res, 200, {
+      day: today,
+      fresh: today === dayString(0),
+      crops: CROPS,
+      markets: MARKETS,
+      grid: CROPS.map(crop => ({
+        crop,
+        cells: MARKETS.map(market => {
+          const price = rows.find(r => r.crop === crop && r.market === market)?.price_per_kg ?? null;
+          const avg = avgOf(crop, market);
+          return {
+            market, price, week_avg: avg == null ? null : Math.round(avg * 100) / 100,
+            drift: price != null && avg ? Math.round(((price - avg) / avg) * 1000) / 10 : 0,
+          };
+        }),
+      })),
+    });
+  }
+
+  /* Manual override for the day's quote — what an operator needs when the feed
+     is stale or a market reports a correction. It writes into the same table
+     the score reads from, so the effect is immediate and auditable. */
+  if (method === 'POST' && resource === 'prices' && !id) {
+    const b = await readBody(req);
+    const crop = requireOneOf(b.crop, CROPS, 'crop').toLowerCase();
+    const market = requireOneOf(b.market, MARKETS, 'market');
+    const price = requirePositiveNumber(b.price_per_kg, 'price_per_kg', 10_000);
+    const day = dayString(0);
+    const previous = db.prepare(
+      'SELECT price_per_kg FROM prices WHERE crop = ? AND market = ? AND day = ?').get(crop, market, day);
+    db.prepare(`INSERT INTO prices (crop, market, day, price_per_kg) VALUES (?,?,?,?)
+      ON CONFLICT(crop, market, day) DO UPDATE SET price_per_kg = excluded.price_per_kg`)
+      .run(crop, market, day, Math.round(price * 100) / 100);
+    scoreCache.clear();   // market timing is scored against these prices
+    audit(req, 'price.override', {
+      targetType: 'price', targetId: `${crop}|${market}|${day}`, targetLabel: `${crop} · ${market}`,
+      detail: { from: previous?.price_per_kg ?? null, to: price },
+    });
+    return json(res, 200, { crop, market, day, price_per_kg: price });
+  }
+
+  /* ----------------------------------------------------- announcements */
+  if (method === 'GET' && resource === 'announcements' && !id) {
+    return json(res, 200, db.prepare(
+      'SELECT * FROM announcements ORDER BY active DESC, created_at DESC LIMIT 100').all());
+  }
+
+  if (method === 'POST' && resource === 'announcements' && !id) {
+    const b = await readBody(req);
+    const title = requireText(b.title, 'title', 90);
+    const body = requireText(b.body, 'message', 400);
+    const level = requireOneOf(b.level ?? 'info', ANNOUNCEMENT_LEVELS, 'level');
+    const county = b.county === '' || b.county == null ? null : requireText(b.county, 'county', 60);
+    const newId = crypto.randomUUID();
+    db.prepare(`INSERT INTO announcements (id, title, body, level, county, active, created_by)
+      VALUES (?,?,?,?,?,1,?)`).run(newId, title, body, level, county, req.account.name);
+    audit(req, 'announcement.publish', { targetType: 'announcement', targetId: newId, targetLabel: title, detail: { level, county } });
+    return json(res, 201, db.prepare('SELECT * FROM announcements WHERE id = ?').get(newId));
+  }
+
+  if (method === 'POST' && resource === 'announcements' && id && action === 'active') {
+    const b = await readBody(req);
+    const active = b.active ? 1 : 0;
+    const row = db.prepare('SELECT * FROM announcements WHERE id = ?').get(id);
+    if (!row) return json(res, 404, { error: 'No such announcement' });
+    db.prepare('UPDATE announcements SET active = ? WHERE id = ?').run(active, id);
+    audit(req, active ? 'announcement.resume' : 'announcement.pause',
+      { targetType: 'announcement', targetId: id, targetLabel: row.title });
+    return json(res, 200, { id, active: Boolean(active) });
+  }
+
+  if (method === 'DELETE' && resource === 'announcements' && id && !action) {
+    const row = db.prepare('SELECT * FROM announcements WHERE id = ?').get(id);
+    if (!row) return json(res, 404, { error: 'No such announcement' });
+    db.prepare('DELETE FROM announcements WHERE id = ?').run(id);
+    audit(req, 'announcement.delete', { targetType: 'announcement', targetId: id, targetLabel: row.title });
+    return json(res, 200, { id, deleted: true });
+  }
+
+  /* -------------------------------------------------------- audit log */
+  if (method === 'GET' && resource === 'audit' && !id) {
+    // rowid breaks ties: several actions inside the same second are common
+    // when an operator works through a list, and they should read in order.
+    return json(res, 200, db.prepare(
+      'SELECT * FROM admin_actions ORDER BY created_at DESC, rowid DESC LIMIT ?').all(limitParam(120)));
+  }
+
+  /* ------------------------------------------------------------ system */
+  if (method === 'GET' && resource === 'system' && !id) {
+    const dbPath = process.env.MAVUNO_DB || path.join(__dirname, 'mavuno.db');
+    const sizeOf = f => { try { return fs.statSync(f).size; } catch { return 0; } };
+    const count = table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+    return json(res, 200, {
+      uptime_s: Math.round(process.uptime()),
+      node: process.version,
+      started_at: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+      payhero: getPayHeroConfigStatus(),
+      price_feed: {
+        through: db.prepare('SELECT MAX(day) AS day FROM prices').get().day,
+        fresh: db.prepare('SELECT MAX(day) AS day FROM prices').get().day === dayString(0),
+        rows: count('prices'),
+      },
+      database: {
+        path: dbPath,
+        size_bytes: sizeOf(dbPath) + sizeOf(dbPath + '-wal'),
+        tables: ['farmers', 'harvests', 'loans', 'diagnoses', 'payment_transactions', 'prices', 'announcements', 'admin_actions']
+          .map(t => ({ table: t, rows: count(t) })),
+      },
+      policy: {
+        session_ttl_minutes: SESSION_TTL_MS / 60_000,
+        daily_disbursement_cap: DAILY_DISBURSEMENT_CAP,
+        rate_limits: RATE_LIMITS,
+        lockout_threshold: LOCKOUT_THRESHOLD,
+        lockout_minutes: LOCKOUT_MS / 60_000,
+        max_farm_acres: MAX_FARM_ACRES,
+        payhero_timeout_ms: PAYHERO_TIMEOUT_MS,
+      },
+      administrators: db.prepare(
+        "SELECT id, name, phone, joined_at, status FROM farmers WHERE role = 'admin' ORDER BY joined_at").all(),
+      locked_out_now: [...loginFailures.values()].filter(f => f.count >= LOCKOUT_THRESHOLD && Date.now() < f.until).length,
+    });
+  }
+
+  return json(res, 404, { error: 'Unknown admin endpoint' });
+}
+
 function buildAdvisory() {
   const month = new Date().getMonth(); // 0-based
   const tips = [];
@@ -1162,7 +1734,7 @@ function applyCors(req, res) {
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   return true;
 }
 
