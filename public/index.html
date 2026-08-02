@@ -250,7 +250,17 @@
 
 <!-- ============================================================== LOGIN -->
 <div class="login-screen" id="loginScreen" hidden>
-  <form class="login-card" id="loginForm">
+  <button type="button" class="back-home" id="backToLanding">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" fill="currentColor"/></svg>
+    Back to home
+  </button>
+
+  <!-- Autofill is suppressed three ways, because Chrome ignores plain
+       autocomplete="off" on anything it decides is a sign-in form: the PIN
+       fields claim to be new-password, the name attributes deliberately miss
+       every autofill heuristic, and app.js blanks the fields on show. A shared
+       demo handset must never offer the last farmer's number to the next. -->
+  <form class="login-card" id="loginForm" autocomplete="off">
     <a class="lp-brand" href="#" id="loginBackHome">
       <span class="lp-brand-name">Mavuno<span>AI</span></span>
     </a>
@@ -258,12 +268,12 @@
     <p class="login-sub">Use the phone number registered with your MavunoAI account.</p>
 
     <label class="field">Phone number
-      <input id="loginPhone" name="phone" type="tel" inputmode="tel" autocomplete="username"
+      <input id="loginPhone" name="mv-acct" type="text" inputmode="tel" autocomplete="off"
              placeholder="07XX XXX XXX" required>
     </label>
     <label class="field">PIN
-      <input id="loginPin" name="pin" type="password" inputmode="numeric" autocomplete="current-password"
-             pattern="[0-9]*" maxlength="8" placeholder="••••" required>
+      <input id="loginPin" name="mv-key" type="password" inputmode="numeric" autocomplete="new-password"
+             pattern="[0-9]*" minlength="4" maxlength="8" placeholder="4–8 digits" required>
     </label>
 
     <p class="login-error" id="loginError" role="alert" hidden></p>
@@ -276,18 +286,20 @@
 
     <p class="login-hint">
       <strong>Demo accounts</strong>
-      0712 345 678 · Amina Chebet<br>
-      0723 456 789 · John Kiprop<br>
-      0734 567 890 · Mary Atieno<br>
+      0712 345 678 · Amina &nbsp;·&nbsp; 0723 456 789 · John &nbsp;·&nbsp; 0734 567 890 · Mary<br>
       PIN <strong>1234</strong> for all three.
     </p>
-    <button type="button" class="link-btn" id="backToLanding">← Back to home</button>
   </form>
 </div>
 
 <!-- ============================================================= SIGN UP -->
 <div class="login-screen" id="signupScreen" hidden>
-  <form class="login-card" id="signupForm">
+  <button type="button" class="back-home" id="signupBackToLanding">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" fill="currentColor"/></svg>
+    Back to home
+  </button>
+
+  <form class="login-card" id="signupForm" autocomplete="off">
     <a class="lp-brand" href="#" id="signupBackHome">
       <span class="lp-brand-name">Mavuno<span>AI</span></span>
     </a>
@@ -295,16 +307,16 @@
     <p class="login-sub">Four details and a PIN. Your first harvest starts the credit file.</p>
 
     <label class="field">Full name
-      <input id="signupName" name="name" type="text" autocomplete="name"
+      <input id="signupName" name="mv-who" type="text" autocomplete="off"
              maxlength="80" placeholder="e.g. Amina Chebet" required>
     </label>
     <label class="field">Phone number
-      <input id="signupPhone" name="phone" type="tel" inputmode="tel" autocomplete="tel"
+      <input id="signupPhone" name="mv-acct2" type="text" inputmode="tel" autocomplete="off"
              placeholder="07XX XXX XXX" required>
     </label>
     <div class="form-row">
       <label class="field">County
-        <select id="signupCounty" name="county" required>
+        <select id="signupCounty" name="mv-area" autocomplete="off" required>
           <option value="">— select —</option>
           <option>Uasin Gishu</option><option>Nakuru</option><option>Kisumu</option>
           <option>Trans Nzoia</option><option>Bungoma</option><option>Kakamega</option>
@@ -315,17 +327,17 @@
         </select>
       </label>
       <label class="field">Farm size (acres)
-        <input id="signupAcres" name="farm_size_acres" type="number"
+        <input id="signupAcres" name="mv-size" type="number" autocomplete="off"
                min="0.1" max="500" step="0.1" placeholder="e.g. 2.5" required>
       </label>
     </div>
     <div class="form-row">
       <label class="field">Choose a PIN
-        <input id="signupPin" name="pin" type="password" inputmode="numeric"
+        <input id="signupPin" name="mv-key2" type="password" inputmode="numeric" autocomplete="new-password"
                pattern="[0-9]*" minlength="4" maxlength="8" placeholder="4–8 digits" required>
       </label>
       <label class="field">Confirm PIN
-        <input id="signupPin2" name="pin_confirm" type="password" inputmode="numeric"
+        <input id="signupPin2" name="mv-key3" type="password" inputmode="numeric" autocomplete="new-password"
                pattern="[0-9]*" minlength="4" maxlength="8" placeholder="repeat it" required>
       </label>
     </div>
@@ -337,7 +349,6 @@
       Already registered?
       <button type="button" class="link-btn" id="goToLogin">Sign in</button>
     </p>
-    <button type="button" class="link-btn" id="signupBackToLanding">← Back to home</button>
   </form>
 </div>
 

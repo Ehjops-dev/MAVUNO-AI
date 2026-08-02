@@ -350,8 +350,13 @@ a { color: inherit; text-decoration: none; }
 .lp-footer-base { margin-top: 44px; padding-top: 22px; border-top: 1px solid var(--line-soft); font-size: 12.5px; color: var(--muted-soft); text-align: center; }
 
 /* ================================================================ LOGIN */
+/* Auth screens hold still: the page itself never scrolls, and the card takes
+   over with its own scrollbar only on viewports too short to seat it. dvh
+   rather than vh so a mobile browser's collapsing toolbar cannot push the
+   card under the fold. */
 .login-screen {
-  min-height: 100vh; display: grid; place-items: center; padding: 40px 24px;
+  position: relative; height: 100vh; height: 100dvh; overflow: hidden;
+  display: grid; place-items: center; padding: 24px;
   background:
     radial-gradient(760px 420px at 82% -8%, rgba(22,163,74,.10), transparent 62%),
     radial-gradient(620px 460px at -8% 106%, rgba(6,95,70,.08), transparent 58%),
@@ -360,19 +365,35 @@ a { color: inherit; text-decoration: none; }
 .login-card {
   width: min(432px, 100%); background: var(--surface);
   border: 1px solid var(--line-soft); border-radius: var(--radius);
-  box-shadow: var(--shadow-lift); padding: 38px 34px;
-  display: flex; flex-direction: column; gap: 18px;
+  box-shadow: var(--shadow-lift); padding: 32px 30px;
+  display: flex; flex-direction: column; gap: 15px;
+  max-height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
 }
-.login-title { font-size: 24px; color: var(--primary-deep); margin-top: 6px; }
-.login-sub { font-size: 14px; line-height: 1.6; color: var(--muted); margin-top: -10px; }
+
+.back-home {
+  position: absolute; top: 22px; left: 24px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 18px 10px 14px; border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, .72);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line); color: var(--ink);
+  font-family: var(--sans); font-size: 13px; font-weight: 600; cursor: pointer;
+  box-shadow: var(--shadow-calm);
+  transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+}
+.back-home svg { width: 17px; height: 17px; transition: transform .16s ease; }
+.back-home:hover { background: #fff; border-color: var(--primary); color: var(--primary-deep); }
+.back-home:hover svg { transform: translateX(-3px); }
+.login-title { font-size: 23px; color: var(--primary-deep); margin-top: 4px; }
+.login-sub { font-size: 14px; line-height: 1.55; color: var(--muted); margin-top: -9px; }
 .login-error {
   background: var(--danger-soft); border: 1px solid rgba(220,38,38,.24); color: #991b1b;
   border-radius: var(--radius-sm); padding: 11px 14px; font-size: 13.5px;
 }
 .login-hint {
-  font-size: 12.5px; line-height: 1.9; color: var(--muted);
+  font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface-tint); border: 1px solid var(--line-soft);
-  border-radius: 12px; padding: 14px 16px;
+  border-radius: 12px; padding: 12px 14px;
 }
 .login-hint strong { display: block; color: var(--primary-deep); font-weight: 700; margin-bottom: 4px; }
 .login-hint strong:not(:first-child) { display: inline; }
@@ -716,6 +737,18 @@ a { color: inherit; text-decoration: none; }
 }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 14px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
+/* Short viewports — laptops at 650–720px and most phones. Tightening the auth
+   card here is what keeps the six-field sign-up form seated without its own
+   scrollbar; below this it falls back to scrolling inside the card. */
+@media (max-height: 780px), (max-width: 620px) {
+  .login-card { gap: 12px; padding: 26px 26px; }
+  .login-card .field input, .login-card .field select { padding: 11px 13px; font-size: 14px; }
+  .login-title { font-size: 21px; }
+  .login-sub { font-size: 13.5px; }
+  .login-card .btn-lg { padding: 13px 24px; }
+  .login-hint { line-height: 1.6; padding: 10px 13px; }
+}
+
 /* ============================================================ responsive */
 @media (max-width: 1180px) {
   .bento, .market-grid { grid-template-columns: repeat(2, 1fr); }
@@ -751,6 +784,11 @@ a { color: inherit; text-decoration: none; }
 }
 
 @media (max-width: 620px) {
+  /* The card is nearly full-width here, so the floating back pill would land on
+     top of it — put it in the flow above the card instead. */
+  .login-screen { display: flex; flex-direction: column; padding: 16px 16px 20px; }
+  .back-home { position: static; align-self: flex-start; margin-bottom: 12px; padding: 8px 14px 8px 11px; font-size: 12.5px; }
+  .login-card { margin: auto; padding: 26px 22px; }
   .card { padding: 22px; }
   .table-scroll { margin-inline: -22px; padding-inline: 22px; }
   .form-row { grid-template-columns: 1fr; }
