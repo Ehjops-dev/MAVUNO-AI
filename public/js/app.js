@@ -7,6 +7,10 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const KES = n => 'KES ' + Math.round(n).toLocaleString('en-KE');
 
+/* Activate the deferred Inter stylesheet. The markup ships it as media="print"
+   so it never blocks first paint; an inline onload would be refused by the CSP. */
+$('#interFont')?.setAttribute('media', 'all');
+
 /* Every value that reaches innerHTML goes through esc(). Disease names,
    markets, seasons and farmer names all originate from user input at some
    point, and unescaped they are a stored-XSS route. */
@@ -106,9 +110,8 @@ const state = {
   doctorCrop: 'maize',
   marketCrop: 'maize',
   leafImage: null,
-  selectedFarmerId: localStorage.getItem('mavuno_farmer_id') || '',
   token: sessionStorage.getItem('mavuno_token') || '',
-  demoMode: true,
+  farmer: null,
 };
 
 /* ------------------------------------------------ api client */
@@ -142,31 +145,55 @@ async function api(path, options = {}) {
   return body;
 }
 
-function setSession(token, farmerId) {
+function setSession(token, farmer) {
   state.token = token;
-  state.selectedFarmerId = farmerId;
+  state.farmer = farmer;
   // sessionStorage, not localStorage: the token dies with the tab.
   sessionStorage.setItem('mavuno_token', token);
-  localStorage.setItem('mavuno_farmer_id', farmerId);
 }
 
 function clearSession() {
   state.token = '';
+  state.farmer = null;
   sessionStorage.removeItem('mavuno_token');
 }
 
 /* ------------------------------------------------ navigation */
-$$('.nav-item').forEach(btn => btn.addEventListener('click', () => {
-  $$('.nav-item').forEach(b => { b.classList.remove('active'); b.removeAttribute('aria-current'); });
-  btn.classList.add('active');
-  btn.setAttribute('aria-current', 'page');
+const VIEW_TITLES = {
+  dashboard: 'Dashboard', doctor: 'Crop Doctor', markets: 'Markets',
+  harvests: 'My Harvests', credit: 'Mavuno Score',
+};
+
+function showView(view) {
+  $$('.nav-item').forEach(b => {
+    const on = b.dataset.view === view;
+    b.classList.toggle('active', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
   $$('.view').forEach(v => v.classList.remove('active'));
-  $('#view-' + btn.dataset.view).classList.add('active');
-  if (btn.dataset.view === 'markets') loadMarkets(state.marketCrop);
-  if (btn.dataset.view === 'harvests') loadHarvests();
-  if (btn.dataset.view === 'credit') loadCredit();
-  if (btn.dataset.view === 'doctor') loadScanHistory();
-}));
+  $('#view-' + view)?.classList.add('active');
+  $('#topbarTitle').textContent = VIEW_TITLES[view] || '';
+  closeSidebar();
+
+  if (view === 'markets') loadMarkets(state.marketCrop);
+  if (view === 'harvests') loadHarvests();
+  if (view === 'credit') loadCredit();
+  if (view === 'doctor') loadScanHistory();
+}
+
+$$('.nav-item').forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.view)));
+// Cards can deep-link into a view ("View Mavuno Score", "Full report").
+$$('[data-goto]').forEach(el => el.addEventListener('click', () => showView(el.dataset.goto)));
+
+/* mobile sidebar */
+const closeSidebar = () => {
+  $('#sidebar')?.classList.remove('open');
+  $('#menuToggle')?.setAttribute('aria-expanded', 'false');
+};
+$('#menuToggle').addEventListener('click', () => {
+  const open = $('#sidebar').classList.toggle('open');
+  $('#menuToggle').setAttribute('aria-expanded', String(open));
+});
 
 function toast(msg) {
   const t = $('#toast');
@@ -195,35 +222,50 @@ function renderError(selector, err, retry) {
 const setBusy = (selector, on) => $(selector)?.setAttribute('aria-busy', on ? 'true' : 'false');
 
 async function loadDashboard() {
-  setBusy('#statRow', true);
+  setBusy('#mScore', true);
   let d;
   try {
     d = await api('/api/dashboard');
   } catch (err) {
-    if (err.status !== 401) renderError('#statRow', err, loadDashboard);
+    if (err.status !== 401) renderError('#tickerList', err, loadDashboard);
     return;
   } finally {
-    setBusy('#statRow', false);
+    setBusy('#mScore', false);
   }
 
   state.farmer = d.farmer;
+  renderAccount(d.farmer);
 
   const hour = new Date().getHours();
   $('#greeting').textContent =
     (hour < 12 ? 'Habari ya asubuhi' : hour < 17 ? 'Habari ya mchana' : 'Habari ya jioni') +
     ', ' + d.farmer.name.split(' ')[0];
 
-  $('#headScore .head-score-num').textContent = d.score;
+  /* hero metrics. A farmer who has logged nothing yet gets an em-dash and an
+     invitation rather than a score of 0 — being new is not a bad record. */
+  const firstRun = d.harvestCount === 0;
+  $('#mScore').innerHTML = (firstRun ? '<span class="metric-none">—</span>' : d.score) +
+    '<span class="metric-of">/ 850</span>';
+  $('#mTier').textContent = d.tier;
+  $('#mRevenue').textContent = KES(d.totalRevenue);
+  $('#mHarvests').textContent = d.harvestCount;
+  $('#mProduce').textContent = (d.totalKg / 1000).toFixed(1) + ' t';
   $('#weatherCounty').textContent = d.farmer.county;
-  $('#sidebarFarmer .farmer-name').textContent = d.farmer.name;
-  $('#sidebarFarmer .farmer-county').textContent = d.farmer.county + ' · ' + d.farmer.farm_size_acres + ' acres';
-  $('#sidebarFarmer .avatar').textContent = d.farmer.name.split(' ').map(w => w[0]).join('').slice(0, 2);
 
-  $('#statRow').innerHTML = `
-    <div class="stat"><div class="stat-num">${d.harvestCount}</div><div class="stat-label">Harvests logged</div></div>
-    <div class="stat"><div class="stat-num">${(d.totalKg / 1000).toFixed(1)}<small> t</small></div><div class="stat-label">Total produce</div></div>
-    <div class="stat"><div class="stat-num">${Math.round(d.totalRevenue / 1000)}<small>K KES</small></div><div class="stat-label">Lifetime revenue</div></div>
-    <div class="stat"><div class="stat-num" style="color:var(--gold)">${esc(d.tier)}</div><div class="stat-label">Credit tier</div></div>`;
+  // Headline credit number: the largest offer the farmer currently qualifies for.
+  const score = await api('/api/score').catch(() => null);
+  const best = score?.offers?.length ? Math.max(...score.offers.map(o => o.amount)) : 0;
+  $('#mCredit').textContent = best ? best.toLocaleString('en-KE') : '0';
+  $('#creditCalloutTitle').textContent = score && !firstRun ? score.tier : 'Your credit standing';
+  $('#creditCalloutBody').textContent = best
+    ? `You qualify for up to ${KES(best)} in collateral-free financing, priced from your harvest record.`
+    : 'Log more seasons to unlock your first collateral-free facility — every harvest raises your score.';
+
+  const advisory = d.advisory || [];
+  $('.rec-label', $('#topAdvice')).textContent = firstRun ? 'Start here' : "Today's recommendation";
+  $('#topAdviceBody').textContent = firstRun
+    ? 'Log your first harvest — one entry activates your Mavuno Score, credit offers and market timing.'
+    : advisory.length ? `${advisory[0].title} — ${advisory[0].body}` : '—';
 
   $('#weatherStrip').innerHTML = d.weather.map(w => `
     <div class="weather-day">
@@ -241,20 +283,33 @@ async function loadDashboard() {
     </div>`).join('');
 
   // Say which day the prices are from rather than implying they are always today's.
-  const asOf = $('#pricesAsOf');
-  if (asOf && d.prices_as_of) {
+  if (d.prices_as_of) {
     const fresh = d.prices_as_of === new Date().toISOString().slice(0, 10);
-    asOf.textContent = fresh
-      ? 'updated today'
-      : 'as of ' + new Date(d.prices_as_of + 'T00:00:00Z').toLocaleDateString('en-KE', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+    const label = fresh
+      ? 'Updated today'
+      : 'As of ' + new Date(d.prices_as_of + 'T00:00:00Z').toLocaleDateString('en-KE', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+    $('#pricesAsOf').textContent = label + ' · average across five markets';
+    const chip = $('#feedChip');
+    chip.textContent = fresh ? 'Prices live' : 'Prices stale';
+    chip.className = 'chip ' + (fresh ? 'chip-ok' : 'chip-warn');
   }
 
-  $('#adviceGrid').innerHTML = d.advisory.map(a => `
+  $('#adviceGrid').innerHTML = advisory.map(a => `
     <div class="advice">
       <div class="a-icon" aria-hidden="true">${ADVICE_EMOJI[a.icon] || '🌾'}</div>
       <div class="a-title">${esc(a.title)}</div>
       <div class="a-body">${esc(a.body)}</div>
     </div>`).join('');
+}
+
+/* Topbar identity + account menu. This replaces the old profile switcher:
+   a session belongs to one farmer, and the only action is signing out. */
+function renderAccount(farmer) {
+  const initials = farmer.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  $('#topAvatar').textContent = initials;
+  $('#topFarmerName').textContent = farmer.name.split(' ')[0];
+  $('#menuFarmerName').textContent = farmer.name;
+  $('#menuFarmerMeta').textContent = `${farmer.county} · ${farmer.farm_size_acres} acres`;
 }
 
 /* ------------------------------------------------ crop doctor */
@@ -415,17 +470,15 @@ function renderDiagnosis({ disease, confidence, features, recognised }) {
       <span class="sev ${esc(disease.severity)}">${healthy ? 'healthy' : esc(disease.severity) + ' risk'}</span>
     </div>
     <div class="diag-sci">${esc(disease.sci)}</div>
-    <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--cream-dim)">
-      <span>Model confidence</span><span>${confidence}%</span>
-    </div>
+    <div class="conf-row"><span>Model confidence</span><span>${confidence}%</span></div>
     <div class="conf-bar"><div class="conf-fill" style="width:0%"></div></div>
     <div class="diag-section"><h4>What the scan saw</h4>
       <p>Yellowing ${(features.chlorosis * 100).toFixed(0)}% · Browning ${(features.necrosis * 100).toFixed(0)}% · Dark lesions ${(features.spotting * 100).toFixed(0)}% of leaf tissue.</p>
-      <div style="display:flex;height:10px;border-radius:99px;overflow:hidden;background:rgba(242,236,217,.08);margin-top:8px;border:1px solid rgba(242,236,217,.05);">
-        ${features.chlorosis > 0.01 ? `<div style="width:${(features.chlorosis * 100).toFixed(0)}%;background:var(--gold);" title="Yellowing"></div>` : ''}
-        ${features.necrosis > 0.01 ? `<div style="width:${(features.necrosis * 100).toFixed(0)}%;background:var(--red);" title="Browning"></div>` : ''}
-        ${features.spotting > 0.01 ? `<div style="width:${(features.spotting * 100).toFixed(0)}%;background:var(--cream-dim);" title="Dark lesions"></div>` : ''}
-        ${(1 - features.chlorosis - features.necrosis - features.spotting) > 0.01 ? `<div style="width:${((1 - features.chlorosis - features.necrosis - features.spotting) * 100).toFixed(0)}%;background:var(--green);" title="Healthy green"></div>` : ''}
+      <div class="tissue-bar">
+        ${features.chlorosis > 0.01 ? `<div style="width:${(features.chlorosis * 100).toFixed(0)}%;background:#eab308" title="Yellowing"></div>` : ''}
+        ${features.necrosis > 0.01 ? `<div style="width:${(features.necrosis * 100).toFixed(0)}%;background:#b45309" title="Browning"></div>` : ''}
+        ${features.spotting > 0.01 ? `<div style="width:${(features.spotting * 100).toFixed(0)}%;background:#475569" title="Dark lesions"></div>` : ''}
+        ${(1 - features.chlorosis - features.necrosis - features.spotting) > 0.01 ? `<div style="width:${((1 - features.chlorosis - features.necrosis - features.spotting) * 100).toFixed(0)}%;background:var(--primary)" title="Healthy green"></div>` : ''}
       </div>
     </div>
     <div class="diag-section"><h4>Typical symptoms</h4><p>${esc(disease.symptoms)}</p></div>
@@ -455,7 +508,9 @@ async function loadScanHistory() {
 }
 
 /* ------------------------------------------------ markets */
-const CHART_COLORS = ['#f0a828', '#4cbf6b', '#6fc2e8', '#e5604c', '#c9a0f5'];
+/* Emerald-led series palette: the primary market reads first, the rest stay
+   distinguishable without competing. */
+const CHART_COLORS = ['#16a34a', '#065f46', '#0891b2', '#c2410c', '#7c3aed'];
 
 renderCropPills('marketCropPills', c => { state.marketCrop = c; loadMarkets(c); }, state.marketCrop);
 
@@ -469,9 +524,19 @@ async function loadMarkets(crop) {
   }
   $('#chartCropLabel').textContent = crop;
   drawPriceChart(d.series);
+
+  const top = d.best[0];
+  if (top) {
+    $('#bestMarketName').textContent = top.market;
+    $('#bestMarketPrice').textContent = top.price.toFixed(1);
+  }
+
   $('#bestMarkets').innerHTML = d.best.map((b, i) => `
-    <div class="best-row">
-      <div><div class="b-market">${esc(b.market)}</div><div class="b-rank">${i === 0 ? '🏆 best price today' : '#' + (i + 1)}</div></div>
+    <div class="best-row ${i === 0 ? 'top' : ''}">
+      <div>
+        <div class="b-market">${esc(b.market)}</div>
+        <div class="b-rank">${i === 0 ? 'Best price today' : 'Rank #' + (i + 1)}</div>
+      </div>
       <div class="b-price">${b.price.toFixed(1)}<small> /kg</small></div>
     </div>`).join('');
 }
@@ -490,14 +555,14 @@ function drawPriceChart(series) {
   // gridlines + y labels
   for (let g = 0; g <= 4; g++) {
     const v = min + (g / 4) * (max - min);
-    out += `<line x1="${PAD.l}" y1="${y(v)}" x2="${W - PAD.r}" y2="${y(v)}" stroke="rgba(242,236,217,.07)" stroke-width="1"/>`;
-    out += `<text x="${PAD.l - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="rgba(242,236,217,.45)">${v.toFixed(0)}</text>`;
+    out += `<line x1="${PAD.l}" y1="${y(v)}" x2="${W - PAD.r}" y2="${y(v)}" stroke="rgba(15,23,42,.07)" stroke-width="1"/>`;
+    out += `<text x="${PAD.l - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${v.toFixed(0)}</text>`;
   }
   // x labels: first, middle, last dates
   const days = series[markets[0]];
   [0, Math.floor(n / 2), n - 1].forEach(i => {
     const dt = new Date(days[i].day).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' });
-    out += `<text x="${x(i)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="rgba(242,236,217,.45)">${dt}</text>`;
+    out += `<text x="${x(i)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="#94a3b8">${dt}</text>`;
   });
   // lines
   markets.forEach((m, mi) => {
@@ -508,9 +573,9 @@ function drawPriceChart(series) {
 
   // hover guides
   out += `<g class="hover-group" style="display:none;">`;
-  out += `<line class="hover-line" x1="0" y1="${PAD.t}" x2="0" y2="${H - PAD.b}" stroke="rgba(240, 168, 40, 0.35)" stroke-width="1.5" stroke-dasharray="4 4" />`;
+  out += `<line class="hover-line" x1="0" y1="${PAD.t}" x2="0" y2="${H - PAD.b}" stroke="rgba(22,163,74,.45)" stroke-width="1.5" stroke-dasharray="4 4" />`;
   markets.forEach((m, mi) => {
-    out += `<circle class="hover-dot-${mi}" r="5" fill="${CHART_COLORS[mi]}" stroke="#122619" stroke-width="1.5" />`;
+    out += `<circle class="hover-dot-${mi}" r="5" fill="${CHART_COLORS[mi]}" stroke="#ffffff" stroke-width="2" />`;
   });
   out += `</g>`;
 
@@ -531,7 +596,7 @@ function drawPriceChart(series) {
   if (!tooltip) {
     tooltip = document.createElement('div');
     tooltip.className = 'chart-tooltip';
-    tooltip.style.cssText = 'display:none;position:absolute;background:rgba(18,38,25,.95);border:1px solid rgba(240,168,40,.45);padding:10px 12px;border-radius:10px;font-size:12.5px;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.65);min-width:200px;color:var(--cream);font-family:var(--sans);z-index:100;';
+    tooltip.style.cssText = 'display:none;position:absolute;background:#ffffff;border:1px solid rgba(15,23,42,.10);padding:12px 14px;border-radius:12px;font-size:12.5px;pointer-events:none;box-shadow:0 12px 28px -8px rgba(6,95,70,.22);min-width:206px;color:#1e293b;font-family:var(--sans);z-index:100;';
     svg.parentNode.style.position = 'relative';
     svg.parentNode.appendChild(tooltip);
   }
@@ -559,7 +624,7 @@ function drawPriceChart(series) {
       hoverGroup.style.display = '';
       
       const dateStr = new Date(days[index].day).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
-      let tooltipHtml = `<div style="font-weight:700;margin-bottom:6px;border-bottom:1px solid rgba(242,236,217,.1);padding-bottom:4px;font-size:11px;text-transform:uppercase;color:var(--gold);">${dateStr}</div>`;
+      let tooltipHtml = `<div style="font-weight:700;margin-bottom:8px;border-bottom:1px solid rgba(15,23,42,.08);padding-bottom:6px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:#16a34a;">${dateStr}</div>`;
       
       markets.forEach((m, mi) => {
         const val = series[m][index].price_per_kg.toFixed(1);
@@ -614,13 +679,46 @@ async function loadHarvests() {
     <tr>
       <td class="crop-cell">${esc(h.crop)}</td>
       <td>${esc(h.season)}</td>
-      <td>${h.quantity_kg.toLocaleString()} kg</td>
-      <td>${h.sold_price_per_kg ? esc(h.sold_price_per_kg) + ' /kg' : '<span style="color:var(--cream-dim)">unsold</span>'}</td>
+      <td class="num">${h.quantity_kg.toLocaleString()} kg</td>
+      <td class="num">${h.sold_price_per_kg ? esc(h.sold_price_per_kg) + ' /kg' : '<span class="muted">—</span>'}</td>
       <td>${esc(h.market || '—')}</td>
       <td>${esc(new Date(h.harvest_date).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }))}</td>
       <td class="rev">${h.sold_price_per_kg ? KES(h.quantity_kg * h.sold_price_per_kg) : '—'}</td>
+      <td><span class="chip ${h.sold_price_per_kg ? 'chip-mint' : 'chip-info'}">${h.sold_price_per_kg ? 'Sold' : 'In storage'}</span></td>
     </tr>`).join('')
-    : '<tr><td colspan="7" style="color:var(--cream-dim);padding:20px 0">No harvests logged yet — every bag you record builds your credit file.</td></tr>';
+    : '<tr><td colspan="8" class="muted" style="padding:26px 14px">No harvests logged yet — every bag you record builds your credit file.</td></tr>';
+
+  renderHarvestStats(rows);
+}
+
+/* Summary tiles above the ledger, computed from the rows already fetched. */
+function renderHarvestStats(rows) {
+  const totalKg = rows.reduce((s, h) => s + h.quantity_kg, 0);
+  const revenue = rows.reduce((s, h) => s + h.quantity_kg * (h.sold_price_per_kg || 0), 0);
+  const sold = rows.filter(h => h.sold_price_per_kg).length;
+  const seasons = new Set(rows.map(h => h.season)).size;
+
+  $('#statRow').innerHTML = `
+    <div class="stat">
+      <div class="stat-icon" aria-hidden="true">📦</div>
+      <div class="stat-num">${(totalKg / 1000).toFixed(1)}<small> t</small></div>
+      <div class="stat-label">Total produce</div>
+    </div>
+    <div class="stat">
+      <div class="stat-icon" aria-hidden="true">💰</div>
+      <div class="stat-num">${KES(revenue)}</div>
+      <div class="stat-label">Lifetime revenue</div>
+    </div>
+    <div class="stat">
+      <div class="stat-icon" aria-hidden="true">🧾</div>
+      <div class="stat-num">${rows.length}<small> entries</small></div>
+      <div class="stat-label">${sold} sold · ${rows.length - sold} in storage</div>
+    </div>
+    <div class="stat">
+      <div class="stat-icon" aria-hidden="true">🌦️</div>
+      <div class="stat-num">${seasons}</div>
+      <div class="stat-label">Seasons on record</div>
+    </div>`;
 }
 
 /* ------------------------------------------------ modals */
@@ -694,9 +792,16 @@ async function loadCredit() {
   drawGauge(s.score);
   $('#gaugeTier').textContent = s.tier;
 
+  $('#gaugeNote').textContent = s.eligible
+    ? `You qualify for up to ${KES(Math.max(...s.offers.map(o => o.amount)))} in collateral-free financing.`
+    : 'Log more seasons to reach your first credit tier.';
+
   $('#scoreBreakdown').innerHTML = s.components.map(c => `
     <div class="bk-row">
-      <div class="bk-head"><span>${esc(c.key)} <span class="bk-hint">· ${esc(c.hint)}</span></span><strong>${c.value}/100</strong></div>
+      <div class="bk-head">
+        <span><span class="bk-key">${esc(c.key)}</span> <span class="bk-hint">· ${esc(c.hint)}</span></span>
+        <strong>${c.value}%</strong>
+      </div>
       <div class="bk-bar" role="meter" aria-label="${esc(c.key)}" aria-valuenow="${c.value}" aria-valuemin="0" aria-valuemax="100">
         <div class="bk-fill" data-w="${c.value}"></div></div>
     </div>`).join('');
@@ -713,14 +818,18 @@ async function loadCredit() {
 
   $('#loanOffers').innerHTML = !s.offers.length
     ? `<div class="no-offers">Log more harvests to unlock loan offers — every season you record raises your score.</div>`
-    : s.offers.map(o => `
+    : s.offers.map((o, i) => `
         <div class="offer">
+          <span class="chip chip-mint">${i === 0 ? 'Fast approval' : 'Harvest priority'}</span>
           <div class="o-name">${esc(o.name)}</div>
-          <div class="o-amount">${KES(o.amount)}</div>
-          <div class="o-terms">${esc(o.rate)}% per month · ${esc(o.term)} months · no collateral</div>
           <div class="o-desc">${esc(o.desc)}</div>
-          <div class="payhero-note">PayHero M-PESA disbursement to your registered phone</div>
-          <button type="button" class="btn btn-gold" data-offer="${esc(o.name)}" ${hasActiveLoan ? 'disabled' : ''}>
+          <div class="o-amount">${KES(o.amount)}</div>
+          <div class="o-terms">
+            <div><div class="o-term-label">Repayment term</div><div class="o-term-value">${esc(o.term)} months</div></div>
+            <div><div class="o-term-label">Service fee</div><div class="o-term-value">${esc(o.rate)}% / month</div></div>
+          </div>
+          <div class="payhero-note">Disbursed by PayHero to your registered M-PESA number</div>
+          <button type="button" class="btn btn-primary btn-block" data-offer="${esc(o.name)}" ${hasActiveLoan ? 'disabled' : ''}>
             ${hasActiveLoan ? 'Repay your active loan first' : 'Apply &amp; disburse'}</button>
         </div>`).join('');
 
@@ -739,20 +848,22 @@ async function loadCredit() {
     }
   }));
 
+  const statusChip = status => status === 'repaid' ? 'chip-mint'
+    : status === 'approved' ? 'chip-info' : 'chip-danger';
+
   $('#loanList').innerHTML = loans.length
     ? loans.map(l => `
         <div class="loan-row">
           <div class="loan-main">
-            <span><strong>${esc(l.purpose)}</strong> · ${KES(l.amount)} · ${esc(l.rate_pct_month)}%/mo × ${esc(l.term_months)} mo</span>
+            <span class="loan-title"><strong>${esc(l.purpose)}</strong> · ${KES(l.amount)} · ${esc(l.rate_pct_month)}%/mo × ${esc(l.term_months)} mo</span>
             ${l.payment_reference ? `<span class="payment-meta">PayHero ${esc(paymentStatusLabel(l.payment_status))} · ${esc(l.payment_reference)} · ${esc(l.payment_phone)}</span>` : ''}
           </div>
           <div class="loan-actions">
-            ${l.payment_status ? `<span class="payment-status ${esc(l.payment_status)}">PayHero ${esc(paymentStatusLabel(l.payment_status))}</span>` : ''}
-            <span class="loan-status" style="background:${l.status === 'repaid' ? 'var(--green-soft)' : 'var(--gold-soft)'};color:${l.status === 'repaid' ? 'var(--green)' : 'var(--gold)'}">${esc(l.status)}</span>
-            ${l.status === 'approved' ? `<button type="button" class="btn btn-gold btn-repay" data-id="${esc(l.id)}" style="padding:4px 10px;font-size:11.5px;border-radius:6px;">Repay</button>` : ''}
+            <span class="chip ${statusChip(l.status)}">${esc(l.status.replace(/_/g, ' '))}</span>
+            ${l.status === 'approved' ? `<button type="button" class="btn btn-ghost btn-sm btn-repay" data-id="${esc(l.id)}">Repay</button>` : ''}
           </div>
         </div>`).join('')
-    : '<div class="no-offers">No loans yet.</div>';
+    : '<div class="no-offers">No facilities yet. Approved loans and their repayments appear here.</div>';
 
   $$('#loanList .btn-repay').forEach(btn => btn.addEventListener('click', async () => {
     btn.textContent = 'Repaying…';
@@ -774,7 +885,7 @@ async function loadCredit() {
 
 function drawGauge(score) {
   const svg = $('#scoreGauge');
-  const cx = 130, cy = 140, r = 105;
+  const cx = 130, cy = 150, r = 105;
   const angle = t => Math.PI * (1 - t); // 0..1 → π..0
   const point = (t, rad) => [cx + rad * Math.cos(angle(t)), cy - rad * Math.sin(angle(t))];
   const arc = (t0, t1, rad) => {
@@ -796,16 +907,16 @@ function drawGauge(score) {
     const [nx, ny] = point(frac, r - 26);
 
     svg.innerHTML = `
-      <path d="${arc(0, 1, r)}" stroke="rgba(242,236,217,.1)" stroke-width="16" fill="none" stroke-linecap="round"/>
-      <path d="${arc(0, Math.max(.02, frac), r)}" stroke="url(#gaugeGrad)" stroke-width="16" fill="none" stroke-linecap="round"/>
+      <path d="${arc(0, 1, r)}" stroke="#eef2f6" stroke-width="18" fill="none" stroke-linecap="round"/>
+      <path d="${arc(0, Math.max(.02, frac), r)}" stroke="url(#gaugeGrad)" stroke-width="18" fill="none" stroke-linecap="round"/>
       <defs><linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0" stop-color="#e5604c"/><stop offset=".55" stop-color="#f0a828"/><stop offset="1" stop-color="#4cbf6b"/>
+        <stop offset="0" stop-color="#dc2626"/><stop offset=".5" stop-color="#eab308"/><stop offset="1" stop-color="#16a34a"/>
       </linearGradient></defs>
-      <circle cx="${nx}" cy="${ny}" r="5" fill="#f2ecd9"/>
-      <text x="${cx}" y="${cy - 22}" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-size="52" font-weight="700" fill="#f0a828">${currentScore}</text>
-      <text x="${cx}" y="${cy + 2}" text-anchor="middle" font-size="11" letter-spacing="2" fill="rgba(242,236,217,.5)">MAVUNO SCORE · 300–850</text>
-      <text x="${cx - r}" y="${cy + 18}" text-anchor="middle" font-size="10" fill="rgba(242,236,217,.4)">300</text>
-      <text x="${cx + r}" y="${cy + 18}" text-anchor="middle" font-size="10" fill="rgba(242,236,217,.4)">850</text>`;
+      <circle cx="${nx}" cy="${ny}" r="6" fill="#ffffff" stroke="#16a34a" stroke-width="2.5"/>
+      <text x="${cx}" y="${cy - 26}" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="54" font-weight="700" letter-spacing="-2" fill="#0f172a">${currentScore}</text>
+      <text x="${cx}" y="${cy - 2}" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10.5" font-weight="700" letter-spacing="1.6" fill="#94a3b8">MAVUNO SCORE · 300–850</text>
+      <text x="${cx - r}" y="${cy + 24}" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10.5" font-weight="600" fill="#94a3b8">300</text>
+      <text x="${cx + r}" y="${cy + 24}" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10.5" font-weight="600" fill="#94a3b8">850</text>`;
 
     if (progress < 1) {
       requestAnimationFrame(animate);
@@ -815,92 +926,78 @@ function drawGauge(score) {
   requestAnimationFrame(animate);
 }
 
-/* ------------------------------------------------ USSD simulator */
-const ussdModal = $('#ussdModal');
-const ussdScreen = $('#ussdScreen');
-let ussdState = 'menu';
-
-/* The greeting used to be the literal string "Karibu Amina!", so every
-   farmer was greeted as Amina — on the last screen of the demo. */
-const ussdMenu = () => {
-  const firstName = (state.farmer?.name || '').split(' ')[0] || 'mkulima';
-  return `MavunoAI  *384*626#
-Karibu ${firstName}!
-
-1. Bei za soko (prices)
-2. Mavuno Score yangu
-3. Angalia hali ya hewa
-4. Omba mkopo (loan)
-0. Ondoka (exit)`;
+/* ================================================================
+   Routing: landing → sign in → dashboard
+   There is no profile switcher. A session belongs to exactly one
+   farmer, and the only way to become a different one is to sign out
+   and sign in again.
+   ================================================================ */
+const screens = {
+  landing: () => $('#landing'),
+  login: () => $('#loginScreen'),
+  signup: () => $('#signupScreen'),
+  app: () => $('#app'),
 };
 
-$('#ussdBtn').addEventListener('click', async () => {
-  openModal('ussdModal');
-  ussdState = 'menu';
-  ussdScreen.textContent = 'Connecting…';
-  await new Promise(r => setTimeout(r, 600));
-  ussdScreen.textContent = ussdMenu();
-  $('#ussdInput').focus();
-});
-$('#ussdClose').addEventListener('click', () => closeModal('ussdModal'));
-
-async function ussdReply(input) {
-  if (ussdState === 'menu') {
-    if (input === '1') {
-      const d = await api('/api/dashboard');
-      return 'BEI ZA LEO (KES/kg)\n\n' +
-        d.prices.map(p => `${p.crop.toUpperCase()}: ${p.price.toFixed(0)} ${p.change_pct >= 0 ? '(+' : '('}${p.change_pct}%)`).join('\n') +
-        '\n\n0. Rudi (back)';
-    }
-    if (input === '2') {
-      const s = await api('/api/score');
-      return `MAVUNO SCORE\n\nScore: ${s.score} / 850\nDaraja: ${s.tier}\n${s.eligible ? 'Unastahili mkopo hadi ' + Math.max(...s.offers.map(o => o.amount)).toLocaleString() + ' KES' : 'Weka rekodi zaidi za mavuno'}\n\n0. Rudi (back)`;
-    }
-    if (input === '3') {
-      const d = await api('/api/dashboard');
-      return 'HALI YA HEWA — ' + d.farmer.county.toUpperCase() + '\n\n' +
-        d.weather.slice(0, 3).map(w => `${w.day}: ${w.label}, ${w.high}°C${w.rain_mm ? ', mvua ' + w.rain_mm + 'mm' : ''}`).join('\n') +
-        '\n\n0. Rudi (back)';
-    }
-    if (input === '4') {
-      const s = await api('/api/score');
-      return s.eligible
-        ? `MKOPO\n\nUnastahili:\n${s.offers.map((o, i) => `${i + 1}. ${o.name} — ${o.amount.toLocaleString()} KES`).join('\n')}\n\nTuma nambari kuomba.\n(demo: apply on the web app)\n\n0. Rudi`
-        : 'Bado hujafikia kiwango cha mkopo.\nWeka rekodi za mavuno kila msimu.\n\n0. Rudi (back)';
-    }
-    if (input === '0') { closeModal('ussdModal'); return ''; }
-  }
-  return ussdMenu();
+function showScreen(name) {
+  for (const [key, el] of Object.entries(screens)) el().hidden = key !== name;
+  window.scrollTo(0, 0);
 }
 
-$('#ussdSend').addEventListener('click', sendUssd);
-$('#ussdInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendUssd(); });
-async function sendUssd() {
-  const v = $('#ussdInput').value.trim();
-  if (!v) return;
-  $('#ussdInput').value = '';
-  ussdScreen.textContent = '…';
-  try {
-    const reply = await ussdReply(v);
-    if (reply) ussdScreen.textContent = reply;
-  } catch (err) {
-    ussdScreen.textContent = 'Huduma haipatikani kwa sasa.\n(' + err.message + ')\n\n0. Rudi';
-  }
+function showLanding() {
+  showScreen('landing');
+  syncLandingChrome();
+  history.replaceState({ screen: 'landing' }, '', '/');
 }
 
-/* ------------------------------------------------ login */
+/* Landing chrome: condense the sticky header once the hero scrolls past and
+   underline the nav link for whichever section is in view. */
+const lpNavLinks = $$('.lp-nav a');
+const lpSections = lpNavLinks.map(a => $(a.getAttribute('href'))).filter(Boolean);
+
+function syncLandingChrome() {
+  const header = $('.lp-header');
+  if (!header || $('#landing').hidden) return;
+  header.classList.toggle('is-scrolled', window.scrollY > 20);
+
+  const line = window.scrollY + 160;
+  let current = -1;
+  lpSections.forEach((section, i) => { if (section.offsetTop <= line) current = i; });
+  lpNavLinks.forEach((link, i) => link.classList.toggle('is-active', i === current));
+}
+window.addEventListener('scroll', syncLandingChrome, { passive: true });
+
 function showLogin(message = '') {
-  $('#app').hidden = true;
-  $('#loginScreen').hidden = false;
+  showScreen('login');
   $('#loginError').textContent = message;
   $('#loginError').hidden = !message;
   $('#loginPhone').focus();
+  history.replaceState({ screen: 'login' }, '', '/signin');
 }
 
-function hideLogin() {
-  $('#loginScreen').hidden = true;
-  $('#app').hidden = false;
+function showSignup(message = '') {
+  showScreen('signup');
+  $('#signupError').textContent = message;
+  $('#signupError').hidden = !message;
+  $('#signupName').focus();
+  history.replaceState({ screen: 'signup' }, '', '/signup');
 }
+
+function showApp() {
+  showScreen('app');
+  history.replaceState({ screen: 'app' }, '', '/dashboard');
+}
+
+/* "Sign in" goes to the login card; "Get started" goes to registration. */
+['#headerSignIn', '#ctaSignIn'].forEach(sel =>
+  $(sel)?.addEventListener('click', () => showLogin()));
+$('#heroSignIn')?.addEventListener('click', () => showSignup());
+$('#goToSignup')?.addEventListener('click', () => showSignup());
+$('#goToLogin')?.addEventListener('click', () => showLogin());
+$('#backToLanding')?.addEventListener('click', () => showLanding());
+$('#signupBackToLanding')?.addEventListener('click', () => showLanding());
+$('#loginBackHome')?.addEventListener('click', e => { e.preventDefault(); showLanding(); });
+$('#signupBackHome')?.addEventListener('click', e => { e.preventDefault(); showLanding(); });
 
 $('#loginForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -916,10 +1013,10 @@ $('#loginForm').addEventListener('submit', async e => {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || 'Sign-in failed');
-    setSession(body.token, body.farmer.id);
-    state.farmer = body.farmer;
-    hideLogin();
+    setSession(body.token, body.farmer);
+    showApp();
     await startApp();
+    toast(`Karibu, ${body.farmer.name.split(' ')[0]}`);
   } catch (err) {
     $('#loginError').textContent = err.message;
     $('#loginError').hidden = false;
@@ -929,6 +1026,79 @@ $('#loginForm').addEventListener('submit', async e => {
     $('#loginPin').value = '';
   }
 });
+
+$('#signupForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const submit = $('button[type=submit]', e.target);
+  const fail = message => {
+    $('#signupError').textContent = message;
+    $('#signupError').hidden = false;
+  };
+
+  const pin = $('#signupPin').value;
+  if (pin !== $('#signupPin2').value) return fail('The two PINs do not match');
+
+  submit.disabled = true;
+  submit.textContent = 'Creating account…';
+  $('#signupError').hidden = true;
+  try {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: $('#signupName').value,
+        phone: $('#signupPhone').value,
+        county: $('#signupCounty').value,
+        farm_size_acres: Number($('#signupAcres').value),
+        pin,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'Could not create the account');
+    setSession(body.token, body.farmer);
+    // Wipe the details so the next person on a shared handset does not find
+    // them waiting in the form.
+    e.target.reset();
+    showApp();
+    await startApp();
+    toast(`Karibu MavunoAI, ${body.farmer.name.split(' ')[0]}`);
+  } catch (err) {
+    fail(err.message);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Create account';
+    $('#signupPin').value = '';
+    $('#signupPin2').value = '';
+  }
+});
+
+/* ------------------------------------------------ account menu */
+const accountMenu = () => $('#accountMenu');
+
+function toggleAccountMenu(force) {
+  const open = force ?? accountMenu().hidden;
+  accountMenu().hidden = !open;
+  $('#accountBtn').setAttribute('aria-expanded', String(open));
+}
+
+$('#accountBtn').addEventListener('click', e => { e.stopPropagation(); toggleAccountMenu(); });
+document.addEventListener('click', e => {
+  if (!accountMenu().hidden && !$('#account').contains(e.target)) toggleAccountMenu(false);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !accountMenu().hidden) toggleAccountMenu(false);
+});
+
+$('#signOutBtn').addEventListener('click', () => {
+  clearSession();
+  toggleAccountMenu(false);
+  showLanding();
+  toast('Signed out');
+});
+
+/* ------------------------------------------------ log-harvest entry points */
+$('#topLogHarvest').addEventListener('click', () => openModal('harvestModal'));
+$('#sidebarLogHarvest').addEventListener('click', () => { closeSidebar(); openModal('harvestModal'); });
 
 /* ------------------------------------------------ boot */
 function refreshActiveView() {
@@ -940,73 +1110,23 @@ function refreshActiveView() {
 }
 
 async function startApp() {
-  await initProfileSwitcher();
   await loadDashboard();
   refreshActiveView();
 }
 
-/* In demo mode the switcher exchanges a farmer id for a real session token,
-   so the on-stage flow stays one click. With DEMO_MODE=0 the server refuses
-   and the PIN login screen is the only way in. */
-async function demoLogin(farmerId) {
-  const res = await fetch('/api/auth/demo-login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ farmerId }),
-  });
-  if (!res.ok) return null;
-  const body = await res.json();
-  setSession(body.token, body.farmer.id);
-  state.farmer = body.farmer;
-  return body.farmer;
-}
-
-async function initProfileSwitcher() {
-  const switcher = $('#profileSwitcher');
-  if (!switcher || switcher.dataset.ready === '1') return;
-
-  let profiles = [];
-  try {
-    profiles = await (await fetch('/api/farmers')).json();
-  } catch {
-    switcher.innerHTML = '<option>Profiles unavailable</option>';
-    return;
-  }
-
-  const known = profiles.some(p => p.id === state.selectedFarmerId);
-  if (!known && profiles.length) state.selectedFarmerId = profiles[0].id;
-
-  switcher.innerHTML = profiles.map(p =>
-    `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.county)})</option>`).join('');
-  switcher.value = state.selectedFarmerId;
-  switcher.dataset.ready = '1';
-
-  switcher.addEventListener('change', async e => {
-    const farmerId = e.target.value;
-    const farmer = await demoLogin(farmerId);
-    if (!farmer) {
-      // Demo mode is off — switching profiles means signing in as them.
-      clearSession();
-      showLogin('Sign in as this farmer to continue.');
-      return;
-    }
-    await loadDashboard();
-    refreshActiveView();
-    toast(`Switched to ${farmer.name}`);
-  });
-}
-
 (async function boot() {
-  const health = await fetch('/api/health').then(r => r.json()).catch(() => ({ demo_mode: false }));
-  state.demoMode = Boolean(health.demo_mode);
-  $('#demoPinHint').hidden = !state.demoMode;
-
-  // A token in sessionStorage survives a reload; otherwise try demo login.
-  if (!state.token && state.demoMode) await demoLogin(state.selectedFarmerId || undefined);
-  if (!state.token) return showLogin();
-
-  hideLogin();
-  await startApp();
+  // A token in sessionStorage survives a reload, so a signed-in farmer lands
+  // straight back on their dashboard instead of the marketing page.
+  if (state.token) {
+    try {
+      showApp();
+      await startApp();
+      return;
+    } catch {
+      clearSession();   // token rejected — fall through to the landing page
+    }
+  }
+  showLanding();
 })();
 
 /* Registering the service worker is what makes the offline claim real: the
