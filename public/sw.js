@@ -11,7 +11,7 @@
    Bump CACHE_VERSION to invalidate old caches on deploy. */
 'use strict';
 
-const CACHE_VERSION = 'mavuno-v1';
+const CACHE_VERSION = 'mavuno-v2';
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const DATA_CACHE = `${CACHE_VERSION}-data`;
 
@@ -21,6 +21,8 @@ const SHELL_ASSETS = [
   '/css/style.css',
   '/js/app.js',
   '/manifest.webmanifest',
+  '/img/farmer-tablet-maize.jpg',
+  '/img/greenhouse-sensors.jpg',
 ];
 
 self.addEventListener('install', event => {

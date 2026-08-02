@@ -6,8 +6,8 @@
  * exercises every API endpoint, the Mavuno Score engine, authentication,
  * loan safety rails, input validation, and static-file security.
  *
- * A second "strict" server runs with DEMO_MODE=0 and tight rate limits so
- * those paths can be tested without starving the main suite.
+ * A second "throttled" server runs with a tight auth rate limit so that path
+ * can be tested without starving the main suite.
  */
 'use strict';
 
@@ -19,15 +19,20 @@ const fs = require('node:fs');
 const os = require('node:os');
 
 const PORT = 4599;
-const STRICT_PORT = 4598;
+const THROTTLED_PORT = 4598;
 const BASE = `http://localhost:${PORT}`;
-const STRICT_BASE = `http://localhost:${STRICT_PORT}`;
+const THROTTLED_BASE = `http://localhost:${THROTTLED_PORT}`;
 const TEST_DB = path.join(os.tmpdir(), `mavuno-test-${Date.now()}.db`);
-const STRICT_DB = path.join(os.tmpdir(), `mavuno-strict-${Date.now()}.db`);
+const THROTTLED_DB = path.join(os.tmpdir(), `mavuno-throttled-${Date.now()}.db`);
 const DEMO_PIN = '1234';
 const AMINA_PHONE = '0712345678';
+const SEEDED_FARMERS = [
+  { phone: '0712345678', name: 'Amina Chebet', county: 'Uasin Gishu' },
+  { phone: '0723456789', name: 'John Kiprop', county: 'Nakuru' },
+  { phone: '0734567890', name: 'Mary Atieno', county: 'Kisumu' },
+];
 
-let serverProc, strictProc, token;
+let serverProc, throttledProc, token;
 
 /* Dates relative to today, so the suite never rots the way the seeded price
    feed did. */
@@ -74,11 +79,9 @@ before(async () => {
   serverProc = startServer(PORT, TEST_DB, {
     RATE_LIMIT_READ: '5000', RATE_LIMIT_WRITE: '5000', RATE_LIMIT_AUTH: '500',
   });
-  strictProc = startServer(STRICT_PORT, STRICT_DB, {
-    DEMO_MODE: '0', RATE_LIMIT_AUTH: '3',
-  });
+  throttledProc = startServer(THROTTLED_PORT, THROTTLED_DB, { RATE_LIMIT_AUTH: '3' });
   await waitFor(BASE);
-  await waitFor(STRICT_BASE);
+  await waitFor(THROTTLED_BASE);
 
   const { status, body } = await postNoAuth('/api/auth/login', { phone: AMINA_PHONE, pin: DEMO_PIN });
   assert.equal(status, 200, 'demo farmer must be able to sign in');
@@ -87,8 +90,8 @@ before(async () => {
 
 after(() => {
   serverProc.kill();
-  strictProc.kill();
-  for (const db of [TEST_DB, STRICT_DB]) {
+  throttledProc.kill();
+  for (const db of [TEST_DB, THROTTLED_DB]) {
     for (const f of [db, db + '-wal', db + '-shm']) {
       try { fs.unlinkSync(f); } catch {}
     }
@@ -149,34 +152,152 @@ test('auth: a session only ever acts as the farmer it was issued for', async () 
   assert.equal(body.farmer.name, 'Mary Atieno', 'header must not override the token identity');
 });
 
+/* ================================================== registration */
+/* Each test that creates an account uses its own phone number: the suite runs
+   against one database and a registered number can never be reused. */
+let newPhoneSeq = 0;
+const freshPhone = () => '07880' + String(++newPhoneSeq).padStart(5, '0');
+
+const register = (overrides = {}) => postNoAuth('/api/auth/register', {
+  name: 'Test Farmer',
+  phone: freshPhone(),
+  county: 'Nakuru',
+  farm_size_acres: 2.5,
+  pin: '4321',
+  ...overrides,
+});
+
+test('register: creates a farmer and returns a working session', async () => {
+  const phone = freshPhone();
+  const { status, body } = await register({ name: 'Grace Wanjiru', phone });
+  assert.equal(status, 201);
+  assert.equal(body.farmer.name, 'Grace Wanjiru');
+  assert.ok(body.token, 'registration must return a session token');
+  assert.ok(!('pin_hash' in body.farmer), 'registration response leaked a PIN hash');
+
+  // The token works, and the new farmer sees their own empty record.
+  const res = await fetch(BASE + '/api/dashboard', { headers: { Authorization: 'Bearer ' + body.token } });
+  const dash = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(dash.farmer.name, 'Grace Wanjiru');
+  assert.equal(dash.harvestCount, 0);
+
+  // A brand-new farmer has no history — not a bad score and no credit offers.
+  const scoreRes = await fetch(BASE + '/api/score', { headers: { Authorization: 'Bearer ' + body.token } });
+  const score = await scoreRes.json();
+  assert.equal(score.tier, 'No history');
+  assert.equal(score.eligible, false);
+  assert.deepEqual(score.offers, []);
+});
+
+test('register: the new PIN signs in afterwards', async () => {
+  const phone = freshPhone();
+  const created = await register({ phone, pin: '507788' });
+  assert.equal(created.status, 201);
+
+  const ok = await postNoAuth('/api/auth/login', { phone, pin: '507788' });
+  assert.equal(ok.status, 200, 'a registered farmer must be able to sign back in');
+  assert.equal(ok.body.farmer.id, created.body.farmer.id);
+
+  const wrong = await postNoAuth('/api/auth/login', { phone, pin: '000000' });
+  assert.equal(wrong.status, 401);
+});
+
+test('register: a phone number can only be claimed once, in any format', async () => {
+  const phone = freshPhone();
+  assert.equal((await register({ phone })).status, 201);
+
+  for (const variant of [phone, '254' + phone.slice(1), '+254 ' + phone.slice(1), phone.slice(1)]) {
+    const { status, body } = await register({ phone: variant });
+    assert.equal(status, 409, `${variant} should collide with ${phone}`);
+    assert.match(body.error, /already registered/i);
+  }
+});
+
+test('register: a seeded demo number cannot be taken over', async () => {
+  const { status } = await register({ phone: AMINA_PHONE, pin: '9999' });
+  assert.equal(status, 409, 'registration must not overwrite a seeded farmer');
+  // The original PIN still works, so the account was untouched.
+  const { status: loginStatus } = await postNoAuth('/api/auth/login', { phone: AMINA_PHONE, pin: DEMO_PIN });
+  assert.equal(loginStatus, 200);
+});
+
+test('register: rejects malformed input', async () => {
+  const cases = [
+    [{ name: 'A' }, /full name/i],
+    [{ name: '   ' }, /full name/i],
+    [{ phone: '0712' }, /mobile number/i],
+    [{ phone: '0812345678' }, /mobile number/i],      // 08 is not a Kenyan mobile prefix
+    [{ county: '' }, /county/i],
+    [{ farm_size_acres: 0 }, /farm size/i],
+    [{ farm_size_acres: -3 }, /farm size/i],
+    [{ farm_size_acres: 100000 }, /farm size/i],
+    [{ farm_size_acres: 'big' }, /farm size/i],
+    [{ pin: '12' }, /pin/i],
+    [{ pin: '123456789' }, /pin/i],
+    [{ pin: 'abcd' }, /pin/i],
+  ];
+  for (const [override, expected] of cases) {
+    const { status, body } = await register(override);
+    assert.equal(status, 400, `expected 400 for ${JSON.stringify(override)}`);
+    assert.match(body.error, expected);
+  }
+});
+
+test('register: a rejected registration creates no farmer', async () => {
+  const phone = freshPhone();
+  const bad = await register({ phone, pin: '1' });
+  assert.equal(bad.status, 400);
+  // The phone is still free, which it would not be if a row had been written.
+  assert.equal((await register({ phone })).status, 201);
+});
+
+test('register: shares the auth rate-limit bucket', async () => {
+  // The throttled server allows 3 auth calls a minute; registration must not
+  // be an unmetered way around that.
+  const results = [];
+  for (let i = 0; i < 6; i++) {
+    results.push((await postNoAuth('/api/auth/register', {
+      name: 'Flood Test', phone: '079900' + String(1000 + i).slice(1),
+      county: 'Nakuru', farm_size_acres: 1, pin: '4321',
+    }, THROTTLED_BASE)).status);
+  }
+  assert.ok(results.includes(429), `expected a 429 among ${results.join(',')}`);
+});
+
 test('auth: PIN hashes are never returned to a client', async () => {
   const { body: dash } = await get('/api/dashboard');
   assert.ok(!('pin_hash' in dash.farmer));
-  const { body: roster } = await get('/api/farmers');
-  for (const f of roster) assert.ok(!('pin_hash' in f), 'roster leaked a PIN hash');
+  const { body: login } = await postNoAuth('/api/auth/login', { phone: AMINA_PHONE, pin: DEMO_PIN });
+  assert.ok(!('pin_hash' in login.farmer), 'login response leaked a PIN hash');
 });
 
-test('auth: the public farmer roster masks phone numbers', async () => {
-  const { body } = await get('/api/farmers');
-  for (const f of body) assert.match(f.phone, /•/, `${f.name}'s number was exposed in full`);
+test('auth: each seeded farmer can sign in and gets their own record', async () => {
+  // Replaces the old public /api/farmers roster: the only way to reach a
+  // farmer's data is to authenticate as them.
+  const seen = new Set();
+  for (const f of SEEDED_FARMERS) {
+    const { status, body } = await postNoAuth('/api/auth/login', { phone: f.phone, pin: DEMO_PIN });
+    assert.equal(status, 200, `${f.name} should be able to sign in`);
+    assert.equal(body.farmer.name, f.name);
+    assert.equal(body.farmer.county, f.county);
+    seen.add(body.farmer.id);
+  }
+  assert.equal(seen.size, 3, 'the three demo profiles must be distinct farmers');
 });
 
-test('auth: demo login is refused when DEMO_MODE=0', async () => {
-  const { status } = await postNoAuth('/api/auth/demo-login', { farmerId: 'farmer-amina-chebet-0001' }, STRICT_BASE);
-  assert.equal(status, 403);
-});
-
-test('auth: PIN login still works when DEMO_MODE=0', async () => {
-  const { status, body } = await postNoAuth('/api/auth/login', { phone: AMINA_PHONE, pin: DEMO_PIN }, STRICT_BASE);
-  assert.equal(status, 200);
-  assert.ok(body.token);
+test('auth: there is no public endpoint listing farmers', async () => {
+  // The roster existed only to populate the profile switcher. With the
+  // switcher gone it is one less way to enumerate users.
+  const { status } = await get('/api/farmers');
+  assert.equal(status, 404);
 });
 
 /* ================================================== rate limiting */
 test('rate limiting: repeated sign-in attempts are throttled', async () => {
   const codes = [];
   for (let i = 0; i < 6; i++) {
-    const res = await fetch(STRICT_BASE + '/api/auth/login', {
+    const res = await fetch(THROTTLED_BASE + '/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: '0799999999', pin: '0000' }),
@@ -519,6 +640,29 @@ test('serves the SPA shell at /', async () => {
   assert.match(res.headers.get('content-type'), /text\/html/);
 });
 
+test('the shell opens on a marketing landing page with a sign-in entry point', async () => {
+  const html = await fetch(BASE + '/').then(r => r.text());
+  assert.match(html, /id="landing"/, 'landing section missing');
+  assert.match(html, /Agricultural intelligence/, 'hero headline missing');
+  assert.match(html, /id="headerSignIn"/, 'header sign-in button missing');
+  assert.match(html, /id="ctaSignIn"/, 'closing call-to-action missing');
+  assert.match(html, /id="loginForm"/, 'sign-in form missing');
+});
+
+test('the USSD simulator and profile switcher are gone from the UI', async () => {
+  const html = await fetch(BASE + '/').then(r => r.text());
+  const js = await fetch(BASE + '/js/app.js').then(r => r.text());
+  for (const [label, needle] of [
+    ['USSD markup', /ussd/i], ['USSD short code', /\*384\*626#/],
+    ['profile switcher', /profileSwitcher/],
+  ]) {
+    assert.ok(!needle.test(html), `${label} still present in index.html`);
+    assert.ok(!needle.test(js), `${label} still present in app.js`);
+  }
+  // The replacement for switching profiles is signing out.
+  assert.match(html, /id="signOutBtn"/, 'sign-out control missing');
+});
+
 test('serves CSS and JS assets with correct MIME types', async () => {
   const css = await fetch(BASE + '/css/style.css');
   assert.equal(css.status, 200);
@@ -579,22 +723,6 @@ test('POST /api/harvests validation: yield exceeding ceiling is rejected with 40
   });
   assert.equal(status, 400);
   assert.match(body.error, /exceeds realistic agronomic capacity/);
-});
-
-test('GET /api/farmers returns all seeded farmers', async () => {
-  const { status, body } = await get('/api/farmers');
-  assert.equal(status, 200);
-  assert.equal(body.length, 3);
-  assert.ok(body.some(f => f.name === 'John Kiprop'));
-  assert.ok(body.some(f => f.name === 'Mary Atieno'));
-});
-
-test('seeded demo data is exactly what the demo script expects', async () => {
-  // Guards against the polluted-database failure: a duplicated profile in the
-  // switcher, or loans left behind by rehearsal.
-  const { body } = await get('/api/farmers');
-  const names = body.map(f => f.name);
-  assert.equal(new Set(names).size, names.length, 'duplicate farmer profiles in the switcher');
 });
 
 /* ================================================== load sanity */

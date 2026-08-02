@@ -32,10 +32,6 @@ loadEnvFile();
 const PORT = process.env.PORT || 4500;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-/* Demo mode keeps the on-stage profile switcher one-click: the client may
-   exchange a farmer id for a session token without typing a PIN. Set
-   DEMO_MODE=0 for the real thing — phone + PIN, no bypass. */
-const DEMO_MODE = String(process.env.DEMO_MODE ?? '1') !== '0';
 /* Signing key for session tokens. Ephemeral unless SESSION_SECRET is set,
    which is the safe default: restarting the server invalidates old tokens. */
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
@@ -226,6 +222,11 @@ function verifyPin(pin, stored) {
 }
 
 const DEMO_PIN = process.env.DEMO_PIN || '1234';
+
+/* Upper bound on a self-registered holding. Smallholder plots are measured in
+   single-digit acres; the cap keeps a typo from inflating the yield ceiling
+   that harvest validation derives from farm size. */
+const MAX_FARM_ACRES = 500;
 
 function seedFarmers() {
   const insertFarmer = db.prepare('INSERT OR IGNORE INTO farmers (id, name, phone, county, farm_size_acres, joined_at) VALUES (?,?,?,?,?,?)');
@@ -737,6 +738,9 @@ async function initiatePayHeroDisbursement({ farmerId, loanId, amount, phoneNumb
 const MIME = {
   '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+  // Without these the landing photos are served as octet-stream, which
+  // X-Content-Type-Options: nosniff then refuses to render.
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
   '.woff2': 'font/woff2', '.json': 'application/json',
   '.webmanifest': 'application/manifest+json',
 };
@@ -747,28 +751,16 @@ const MIME = {
 const PUBLIC_ROUTES = new Set([
   'GET /api/health',
   'GET /api/payhero/config',
-  'GET /api/farmers',
   'GET /api/prices',
   'POST /api/auth/login',
-  'POST /api/auth/demo-login',
+  'POST /api/auth/register',
   'POST /api/payhero/callback',
 ]);
 
 function publicFarmer(row) {
   if (!row) return null;
-  // Never ship pin_hash to a client, and mask the phone number in the
-  // unauthenticated roster used by the profile switcher.
-  const { pin_hash, ...rest } = row;
+  const { pin_hash, ...rest } = row;   // never ship a PIN hash to a client
   return rest;
-}
-
-/* Seeded numbers are stored formatted ("+254 712 345 678"), so masking has to
-   normalise first — a digit-lookahead over the raw string never matches
-   across the spaces and would leak the number in full. */
-function maskPhone(phone) {
-  const digits = normalizeKenyanPhone(phone);
-  if (digits.length < 4) return digits ? '•'.repeat(digits.length) : '';
-  return '•'.repeat(digits.length - 3) + digits.slice(-3);
 }
 
 async function handleApi(req, res, url) {
@@ -779,7 +771,6 @@ async function handleApi(req, res, url) {
     return json(res, 200, {
       status: 'ok',
       uptime_s: Math.round(process.uptime()),
-      demo_mode: DEMO_MODE,
       payhero: getPayHeroConfigStatus().mode,
       price_feed_through: priceDay,
       price_feed_fresh: priceDay === dayString(0),
@@ -815,25 +806,58 @@ async function handleApi(req, res, url) {
     return json(res, 200, { token: signToken(farmer.id), expires_in_s: SESSION_TTL_MS / 1000, farmer: publicFarmer(farmer) });
   }
 
-  if (route === 'POST /api/auth/demo-login') {
-    if (!DEMO_MODE) {
-      return json(res, 403, { error: 'Demo login is disabled. Sign in with your phone number and PIN.' });
-    }
+  /* Self-registration. A new farmer starts with an empty ledger, which the
+     score endpoint already reports as "No history" rather than a low score —
+     nobody is penalised for being new. */
+  if (route === 'POST /api/auth/register') {
     const b = await readBody(req);
-    const farmer = db.prepare('SELECT * FROM farmers WHERE id = ?').get(String(b.farmerId || DEMO_FARMER_ID));
-    if (!farmer) return json(res, 404, { error: 'Unknown farmer' });
-    return json(res, 200, { token: signToken(farmer.id), expires_in_s: SESSION_TTL_MS / 1000, farmer: publicFarmer(farmer), demo: true });
+    const name = String(b.name ?? '').trim().replace(/\s+/g, ' ');
+    const phone = normalizeKenyanPhone(b.phone);
+    const county = String(b.county ?? '').trim();
+    const acres = Number(b.farm_size_acres);
+    const pin = String(b.pin ?? '');
+
+    if (name.length < 2 || name.length > 80) {
+      return json(res, 400, { error: 'Enter your full name' });
+    }
+    if (!/^254[17]\d{8}$/.test(phone)) {
+      return json(res, 400, { error: 'Enter a valid Kenyan mobile number, e.g. 0712 345 678' });
+    }
+    if (county.length < 2 || county.length > 60) {
+      return json(res, 400, { error: 'Select the county you farm in' });
+    }
+    if (!Number.isFinite(acres) || acres <= 0 || acres > MAX_FARM_ACRES) {
+      return json(res, 400, { error: `Farm size must be between 0 and ${MAX_FARM_ACRES} acres` });
+    }
+    // Length only: a stricter policy would lock out the demo PIN, and the real
+    // defence here is the KDF cost plus the per-phone lockout on login.
+    if (!/^\d{4,8}$/.test(pin)) {
+      return json(res, 400, { error: 'PIN must be 4 to 8 digits' });
+    }
+
+    // Seeded phones are stored pretty-printed ("+254 712 345 678"), so the
+    // uniqueness check has to compare normalised forms, exactly like login.
+    const taken = db.prepare('SELECT phone FROM farmers').all()
+      .some(f => normalizeKenyanPhone(f.phone) === phone);
+    if (taken) {
+      return json(res, 409, { error: 'That number is already registered — sign in instead.' });
+    }
+
+    const id = crypto.randomUUID();
+    db.prepare(`INSERT INTO farmers (id, name, phone, county, farm_size_acres, joined_at, pin_hash)
+      VALUES (?,?,?,?,?,?,?)`)
+      .run(id, name, '+' + phone, county, acres, dayString(0), hashPin(pin));
+
+    const farmer = db.prepare('SELECT * FROM farmers WHERE id = ?').get(id);
+    return json(res, 201, {
+      token: signToken(id),
+      expires_in_s: SESSION_TTL_MS / 1000,
+      farmer: publicFarmer(farmer),
+    });
   }
 
   if (route === 'GET /api/payhero/config') {
     return json(res, 200, getPayHeroConfigStatus());
-  }
-
-  /* Roster for the profile switcher / login hints — identifying details only,
-     no phone numbers, no harvest or loan data. */
-  if (route === 'GET /api/farmers') {
-    const rows = db.prepare('SELECT id, name, county, farm_size_acres, phone FROM farmers ORDER BY name').all();
-    return json(res, 200, rows.map(r => ({ ...r, phone: maskPhone(r.phone) })));
   }
 
   if (route === 'GET /api/prices') {
@@ -1207,7 +1231,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`\n  🌾 MavunoAI running →  http://localhost:${PORT}`);
-  console.log(`     auth: ${DEMO_MODE ? 'PIN + demo switcher (DEMO_MODE=1)' : 'PIN required (DEMO_MODE=0)'}`);
+  console.log(`     auth: phone + PIN`);
   console.log(`     payhero: ${getPayHeroConfigStatus().mode}\n`);
 });
 
