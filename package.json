@@ -20,7 +20,11 @@
     "crop-disease"
   ],
   "license": "MIT",
-  "dependencies": {
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ehjops-dev/MAVUNO-AI.git"
+  },
+  "devDependencies": {
     "docx": "^9.7.1",
     "pptxgenjs": "^4.0.1",
     "puppeteer-core": "^25.3.0"

@@ -1,7 +1,7 @@
 # MavunoAI — System Test Report
 
-**Date:** 1 August 2026 · **Environment:** Linux, Node.js v22.22.1 · **Method:** Automated (Node built-in test runner) + manual browser verification in Chrome
-**Result: 57 / 57 automated tests passed · 0 failures · ~2.6 s**
+**Date:** 3 August 2026 · **Environment:** Linux, Node.js v22.22.1 · **Method:** Automated (Node built-in test runner) + manual browser verification in Chrome
+**Result: 86 / 86 automated tests passed · 0 failures · ~2.9 s**
 
 Run the suite yourself:
 
@@ -12,7 +12,7 @@ npm test
 The suite spawns **two** real servers on isolated temporary databases, so it never touches the demo data:
 
 - port **4599** — demo mode, generous rate limits, used by most cases
-- port **4598** — `DEMO_MODE=0` and `RATE_LIMIT_AUTH=3`, used to test the strict auth path and throttling without starving the rest of the suite
+- port **4598** — `RATE_LIMIT_AUTH=3`, used to test throttling and the lockout path without starving the rest of the suite
 
 Dates in the suite are computed relative to today rather than hard-coded, so the tests cannot rot the way the seeded price feed once did.
 
@@ -27,9 +27,9 @@ Dates in the suite are computed relative to today rather than hard-coded, so the
 | TC05 | Auth | Wrong PIN and unknown phone return the *same* error | Identical message, no user enumeration | ✅ Pass |
 | TC06 | Auth | A session can only act as the farmer it was issued for | Header cannot override token identity | ✅ Pass |
 | TC07 | Auth | PIN hashes never returned to a client | Absent from dashboard and roster | ✅ Pass |
-| TC08 | Auth | Public farmer roster masks phone numbers | `•••••••••678` | ✅ Pass |
-| TC09 | Auth | Demo login refused when `DEMO_MODE=0` | HTTP 403 | ✅ Pass |
-| TC10 | Auth | PIN login still works when `DEMO_MODE=0` | HTTP 200 + token | ✅ Pass |
+| TC08 | Auth | No public endpoint lists farmers at all | Roster route gone; 404 / 401, never a list | ✅ Pass |
+| TC09 | Register | Sign-up creates a farmer and returns a working session | 201 + token that authenticates | ✅ Pass |
+| TC10 | Register | The chosen PIN signs in afterwards | HTTP 200 + token | ✅ Pass |
 | TC11 | Security | Repeated sign-in attempts throttled | HTTP 429 within 6 tries | ✅ Pass |
 | TC12 | Dashboard | Fetch farmer snapshot | 7 seeded harvests, >10 t produce, >KES 400k revenue | ✅ Pass |
 | TC13 | Score | Score within 300–850 with named tier | In band, valid tier (732, Prime Harvester) | ✅ Pass |
@@ -74,25 +74,60 @@ Dates in the suite are computed relative to today rather than hard-coded, so the
 | TC52 | Security | Cross-origin caller refused | HTTP 403 | ✅ Pass |
 | TC53 | API | Unknown API route | JSON 404 | ✅ Pass |
 | TC54 | Harvests | Yield above agronomic ceiling rejected | HTTP 400 with explanation | ✅ Pass |
-| TC55 | Farmers | Roster returns all seeded farmers | Exactly 3 | ✅ Pass |
-| TC56 | Farmers | No duplicate profiles in the switcher | Unique names | ✅ Pass |
+| TC55 | Auth | Each seeded farmer signs in and gets their own record | Three distinct sessions, no crossover | ✅ Pass |
+| TC56 | Register | A seeded demo number cannot be taken over | HTTP 409, original account intact | ✅ Pass |
 | TC57 | Load | 50 concurrent dashboard requests | All 200, no errors (~120 ms) | ✅ Pass |
+| TC58 | Register | A phone number can only be claimed once, in any format | `0712…`, `+254712…`, `254712…` all collide | ✅ Pass |
+| TC59 | Register | Malformed sign-up input rejected | HTTP 400 per case | ✅ Pass |
+| TC60 | Register | A rejected registration creates no farmer | No partial row written | ✅ Pass |
+| TC61 | Register | Sign-up shares the auth rate-limit bucket | HTTP 429, cannot bypass login throttle | ✅ Pass |
+| TC62 | Static | Shell opens on the marketing landing page | Landing markup + sign-in entry point | ✅ Pass |
+| TC63 | Static | USSD simulator and profile switcher are gone | Absent from the shipped UI | ✅ Pass |
+| TC64 | Admin | Administrator signs in through the same endpoint | 200, `role: admin` | ✅ Pass |
+| TC65 | Admin | `/api/me` reports the role the server holds, per session | Farmer and admin each labelled correctly | ✅ Pass |
+| TC66 | Admin | A farmer session is refused every admin endpoint | HTTP 403 across the surface | ✅ Pass |
+| TC67 | Admin | Unauthenticated caller refused before the role check | HTTP 401, not 403 | ✅ Pass |
+| TC68 | Admin | Registration can never create an administrator | Self-signup always yields `role: farmer` | ✅ Pass |
+| TC69 | Admin | Overview totals reconcile with the underlying ledgers | Analytics match row-level sums | ✅ Pass |
+| TC70 | Admin | Farmer register searches, filters and scores | Query, filter and score columns correct | ✅ Pass |
+| TC71 | Admin | A farmer file returns that farmer's complete record | Harvests, loans, diagnoses attached | ✅ Pass |
+| TC72 | Admin | Suspending an account blocks sign-in and live sessions | HTTP 403 both at login and mid-session | ✅ Pass |
+| TC73 | Admin | Administrators cannot be suspended or deleted | HTTP 403, account preserved | ✅ Pass |
+| TC74 | Admin | A PIN reset issues a working one-time PIN | Temporary PIN authenticates | ✅ Pass |
+| TC75 | Admin | Deleting an account removes the farmer and their rows | No orphaned harvests, loans or scans | ✅ Pass |
+| TC76 | Admin | Credit book lists every facility with a repayment total | Totals match the ledger | ✅ Pass |
+| TC77 | Admin | Loan status change rescores the farmer; unknown refused | Score recomputed; HTTP 400 on bad status | ✅ Pass |
+| TC78 | Admin | A price override lands in the feed farmers read | Corrected quote visible to farmers | ✅ Pass |
+| TC79 | Admin | Announcement reaches the target, pausing withdraws it | Appears then disappears on the dashboard | ✅ Pass |
+| TC80 | Admin | County-targeted announcement not shown to another county | Scoped correctly | ✅ Pass |
+| TC81 | Admin | Announcement input validated, not stored raw | HTTP 400 on markup, nothing persisted | ✅ Pass |
+| TC82 | Admin | Every administrative write is recorded in the audit trail | Before and after value captured | ✅ Pass |
+| TC83 | Admin | System status reports the rails actually enforced | Caps and limits match the running config | ✅ Pass |
+| TC84 | Admin | Payments ledger and crop-health views answer platform-wide | Cross-farmer data, not one record | ✅ Pass |
+| TC85 | Admin | Unknown admin endpoint returns JSON 404, not the SPA shell | `application/json` 404 | ✅ Pass |
+| TC86 | Admin | Console ships with the shell and shares the login | Served and wired to the same form | ✅ Pass |
 
 ## Manual browser verification (UAT walkthrough)
 
 Performed in Chrome against `http://localhost:4500` on a freshly reset database.
 
+> **Scope note (3 August 2026).** M4–M8 were recorded against the pre-console build and the
+> flows they cover are unchanged. M1–M3 were re-verified after the landing page, sign-up and
+> administrator console landed. The rows for the auto-sign-in demo mode, the profile switcher
+> and the USSD simulator have been dropped rather than marked stale: all three features were
+> removed from the product, so there is nothing left to walk through. TC63 asserts their
+> absence, and the console's own flows are covered automatically by TC64–TC86.
+
 | # | Flow | Result |
 |---|------|--------|
-| M1 | Demo mode auto-signs-in; dashboard renders farmer, weather, prices, advice; **zero console errors**; price card reads "updated today" | ✅ |
-| M2 | `DEMO_MODE=0` shows the PIN login screen with the demo-profile hint | ✅ |
-| M3 | Profile switcher lists exactly 3 farmers (no duplicate Amina), swaps profile without a reload; sidebar, greeting, score and tier all update | ✅ |
+| M1 | Shell opens on the marketing landing page with a working sign-in entry point; no auto-sign-in | ✅ |
+| M2 | Farmer signs in by phone + PIN; dashboard renders farmer, weather, prices and advice; price card reads "updated today" | ✅ |
+| M3 | Administrator signs in at the same form and lands in the console, not a farm record | ✅ |
 | M4 | Crop Doctor: green leaf → *Healthy*, 91% confidence, saved to scan history | ✅ |
 | M5 | Crop Doctor: **non-leaf image (solid blue) → "Not recognised as a crop leaf", no diagnosis, not written to the farm record** | ✅ |
 | M6 | Log harvest (1,750 kg maize @ 52 on 28 Jul) → ledger updated newest-first, revenue KES 91,000, score toast shown | ✅ |
 | M7 | Mavuno Score: gauge animates, 5-factor breakdown, apply → approved, PayHero reference and destination number shown under "Your loans" | ✅ |
 | M8 | **Second application blocked**: both offer buttons become "Repay your active loan first" and disable; repayment component drops 60 → 55 | ✅ |
-| M9 | USSD simulator greets the **active** farmer ("Karibu John!" after switching to John); Escape closes the modal and restores focus | ✅ |
 
 ## Defects found and fixed during testing
 
@@ -109,13 +144,13 @@ Performed in Chrome against `http://localhost:4500` on a freshly reset database.
 | D9 | Validation holes: negative quantities, crops outside the catalogue, and year-2099 dates were all accepted; a non-numeric quantity returned HTTP 500 | High | Whitelists, finite/positive checks, date bounds (TC26) |
 | D10 | `readBody` called `req.destroy()` on oversized input but never settled its promise, leaving the request pending forever | Medium | Promise now rejects with HTTP 413 (TC29) |
 | D11 | No timeout on the PayHero call — a hung provider would hang the request, and with synchronous SQLite, the server | Medium | `AbortSignal.timeout`, failure recorded as a transaction |
-| D12 | Orphan loans pointed at a farmer that no longer existed; the profile switcher showed "Amina Chebet" twice | High | `PRAGMA foreign_keys = ON`, FK constraints, boot-time orphan sweep, `npm run db:reset` (TC55, TC56) |
+| D12 | Orphan loans pointed at a farmer that no longer existed; the profile switcher showed "Amina Chebet" twice | High | `PRAGMA foreign_keys = ON`, FK constraints, boot-time orphan sweep, `npm run db:reset`. The switcher itself was later removed (TC63) |
 | D13 | **Crop Doctor floored confidence at 58%,** so a photo of anything returned a confident diagnosis | High | Two gates: signature distance *and* plant-tissue coverage. Non-leaf images return "Not recognised" (M5) |
 | D14 | **Tissue gate missed on first attempt.** A solid blue image scored zero on all three damage ratios — identical to the "Healthy" signature — and came back "✓ Healthy, 91%" | High | Added a `tissue` feature measuring what share of the frame is plant-coloured at all; caught only by the manual browser pass, not by the API suite |
 | D15 | **CORS check rejected the app's own writes.** Chrome sends an `Origin` header on same-origin POSTs, so login, harvest logging and loan applications would all have returned 403 in a real browser while every automated test passed | **Critical** | Same-origin requests compared by host before consulting the allowlist (M1, M6, M7) |
 | D16 | Service worker used a cache-first shell strategy, serving the previous build on the first load after any change | Medium | Network-first with cache fallback — always current online, still fully offline-capable |
-| D17 | `maskPhone` used a digit-lookahead that never matched across the spaces in `+254 712 345 678`, so the public roster leaked full phone numbers | High | Normalise to digits before masking (TC08) |
-| D18 | USSD menu hard-coded "Karibu Amina!" for every farmer — on the last screen of the demo | Medium | Greeting reads the active farmer (M9) |
+| D17 | `maskPhone` used a digit-lookahead that never matched across the spaces in `+254 712 345 678`, so the public roster leaked full phone numbers | High | Normalise to digits before masking. The public roster was later removed outright, so no endpoint exposes farmer phone numbers at all (TC08) |
+| D18 | USSD menu hard-coded "Karibu Amina!" for every farmer — on the last screen of the demo | Medium | Greeting read the active farmer; the simulator has since been removed from the product (TC63) |
 
 D14, D15 and D16 are worth noting: **all three passed the full API suite and were only caught by driving a real browser.** The automated tests never send an `Origin` header, never run a service worker, and never rasterise an image to a canvas.
 
@@ -125,5 +160,5 @@ D14, D15 and D16 are worth noting: **all three passed the full API suite and wer
 - **Portability:** zero runtime npm dependencies; runs on any Node ≥ 22.5 with one command; leaf analysis runs fully on-device.
 - **Reliability:** malformed input, oversized bodies, unknown routes, unknown crops and a hung payment provider all fail safely without crashing the process. SIGINT/SIGTERM checkpoint the WAL and close the database cleanly.
 - **Security:** authenticated sessions, per-IP rate limiting, PIN lockout, CSP and hardening headers, path-traversal protection, request bodies capped at 256 KB.
-- **Accessibility:** icon-only controls labelled, modals trap focus and close on Escape, live regions on the toast and USSD screen, `prefers-reduced-motion` respected.
+- **Accessibility:** icon-only controls labelled, modals trap focus and close on Escape, live regions on the toast, `prefers-reduced-motion` respected.
 - **Known gaps:** weather and prices are simulated; the Crop Doctor is a colour heuristic, not a CNN; repayment is simulated in demo mode; rate limiting is in-process. All documented in the README.
