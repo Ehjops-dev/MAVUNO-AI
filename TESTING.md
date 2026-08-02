@@ -128,6 +128,7 @@ Performed in Chrome against `http://localhost:4500` on a freshly reset database.
 | M6 | Log harvest (1,750 kg maize @ 52 on 28 Jul) → ledger updated newest-first, revenue KES 91,000, score toast shown | ✅ |
 | M7 | Mavuno Score: gauge animates, 5-factor breakdown, apply → approved, PayHero reference and destination number shown under "Your loans" | ✅ |
 | M8 | **Second application blocked**: both offer buttons become "Repay your active loan first" and disable; repayment component drops 60 → 55 | ✅ |
+| M9 | Crop Doctor gate swept over 31 images — 5 synthetic leaves, 2 field photographs and 24 non-leaves (sky, skin, soil, cardboard, straw, concrete, denim, brick, paper, fruit, and flat green paint, fabric and car panel). Every leaf diagnosed, every non-leaf declined with the reason named; rejected images never written to the farm record | ✅ |
 
 ## Defects found and fixed during testing
 
@@ -145,12 +146,13 @@ Performed in Chrome against `http://localhost:4500` on a freshly reset database.
 | D10 | `readBody` called `req.destroy()` on oversized input but never settled its promise, leaving the request pending forever | Medium | Promise now rejects with HTTP 413 (TC29) |
 | D11 | No timeout on the PayHero call — a hung provider would hang the request, and with synchronous SQLite, the server | Medium | `AbortSignal.timeout`, failure recorded as a transaction |
 | D12 | Orphan loans pointed at a farmer that no longer existed; the profile switcher showed "Amina Chebet" twice | High | `PRAGMA foreign_keys = ON`, FK constraints, boot-time orphan sweep, `npm run db:reset`. The switcher itself was later removed (TC63) |
-| D13 | **Crop Doctor floored confidence at 58%,** so a photo of anything returned a confident diagnosis | High | Two gates: signature distance *and* plant-tissue coverage. Non-leaf images return "Not recognised" (M5) |
+| D13 | **Crop Doctor floored confidence at 58%,** so a photo of anything returned a confident diagnosis | High | Gated on signature distance *and* plant-tissue coverage. Non-leaf images return "Not recognised" (M5). Two further gates were added later — see D19 |
 | D14 | **Tissue gate missed on first attempt.** A solid blue image scored zero on all three damage ratios — identical to the "Healthy" signature — and came back "✓ Healthy, 91%" | High | Added a `tissue` feature measuring what share of the frame is plant-coloured at all; caught only by the manual browser pass, not by the API suite |
 | D15 | **CORS check rejected the app's own writes.** Chrome sends an `Origin` header on same-origin POSTs, so login, harvest logging and loan applications would all have returned 403 in a real browser while every automated test passed | **Critical** | Same-origin requests compared by host before consulting the allowlist (M1, M6, M7) |
 | D16 | Service worker used a cache-first shell strategy, serving the previous build on the first load after any change | Medium | Network-first with cache fallback — always current online, still fully offline-capable |
 | D17 | `maskPhone` used a digit-lookahead that never matched across the spaces in `+254 712 345 678`, so the public roster leaked full phone numbers | High | Normalise to digits before masking. The public roster was later removed outright, so no endpoint exposes farmer phone numbers at all (TC08) |
 | D18 | USSD menu hard-coded "Karibu Amina!" for every farmer — on the last screen of the demo | Medium | Greeting read the active farmer; the simulator has since been removed from the product (TC63) |
+| D19 | **Any flat green surface was diagnosed as a healthy crop.** A green wall, a plain green shirt and green car paint each scored 100% tissue and 100% green, matched the healthy signature at distance 0.087, and came back as a confident diagnosis. Separately, `tissue` counted the brown and dark buckets, so skin, soil, cardboard, straw and coffee all scored 100% tissue and were being turned away only by signature distance — on margins as thin as 0.02 | High | Two more gates. A **green** floor, because every non-plant tested scores exactly 0 there while leaves run 0.19–1.0, and a **local-contrast** floor, because paint and plain fabric are uniform (0–0.008) where real foliage is not (0.016–0.086). Verified on a 31-image set: 28/31 before, 31/31 after (M9) |
 
 D14, D15 and D16 are worth noting: **all three passed the full API suite and were only caught by driving a real browser.** The automated tests never send an `Origin` header, never run a service worker, and never rasterise an image to a canvas.
 

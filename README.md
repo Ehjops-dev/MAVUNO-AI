@@ -11,7 +11,7 @@ becomes a credit score that unlocks collateral-free input loans paid out to M-PE
 
 ## Features
 
-- **Crop Doctor** — leaf photo in, diagnosis and treatment plan out. Runs entirely in the browser, so it works offline and the image is never uploaded.
+- **Crop Doctor** — leaf photo in, diagnosis and treatment plan out. Runs entirely in the browser, so it works offline and the image is never uploaded. Four gates decide whether the photo is a leaf at all; anything else is declined rather than diagnosed.
 - **Market prices** — 60-day price history for 5 crops across 5 markets, ranked by best price today.
 - **Harvest ledger** — record crop, quantity, price and market for every harvest.
 - **Mavuno Score** — a 300–850 credit score built from season consistency, yield trend, crop diversification, market timing and repayment history.

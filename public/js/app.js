@@ -468,18 +468,35 @@ function extractLeafFeatures(img) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(img, 0, 0, size, size);
   const { data } = ctx.getImageData(0, 0, size, size);
+  const lumAt = i => (data[i] + data[i + 1] + data[i + 2]) / 3;
+
   let green = 0, yellow = 0, brown = 0, dark = 0, total = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i], g = data[i + 1], b = data[i + 2];
-    const lum = (r + g + b) / 3;
-    if (lum > 235) continue; // skip background/glare
-    total++;
-    if (lum < 55) dark++;
-    else if (g > r * 1.12 && g > b * 1.12) green++;
-    else if (r > 120 && g > 95 && b < g * 0.75 && r >= g) yellow++;
-    else if (r > g && g >= b && r < 160) brown++;
+  let detailSum = 0, detailPairs = 0;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const lum = (r + g + b) / 3;
+
+      /* Local contrast, sampled across the whole frame including background.
+         A photograph of a real leaf carries veins, serration, shadow and
+         depth-of-field, so neighbouring pixels differ constantly. A flat
+         painted surface — a green wall, a green shirt, a car door — is
+         almost perfectly uniform. Colour cannot tell those apart; this can. */
+      if (x + 1 < size) { detailSum += Math.abs(lum - lumAt(i + 4)); detailPairs++; }
+      if (y + 1 < size) { detailSum += Math.abs(lum - lumAt(i + size * 4)); detailPairs++; }
+
+      if (lum > 235) continue; // skip background/glare
+      total++;
+      if (lum < 55) dark++;
+      else if (g > r * 1.12 && g > b * 1.12) green++;
+      else if (r > 120 && g > 95 && b < g * 0.75 && r >= g) yellow++;
+      else if (r > g && g >= b && r < 160) brown++;
+    }
   }
-  if (!total) return { chlorosis: 0, necrosis: 0, spotting: 0, tissue: 0 };
+  const detail = detailPairs ? (detailSum / detailPairs) / 255 : 0;
+  if (!total) return { chlorosis: 0, necrosis: 0, spotting: 0, tissue: 0, green: 0, detail };
   return {
     chlorosis: yellow / total,
     necrosis: brown / total,
@@ -489,6 +506,13 @@ function extractLeafFeatures(img) {
     // buckets, so tissue lands near zero. Without this, an image with no
     // damage signal is indistinguishable from a perfectly healthy leaf.
     tissue: (green + yellow + brown + dark) / total,
+    /* Green on its own. `tissue` is too generous by itself: the brown and dark
+       buckets catch skin, soil, cardboard, straw, coffee and any dim photo, so
+       a hand or a desk scores tissue = 1.0 and was being turned away only by
+       the signature distance, on margins as thin as 0.02. A leaf — even a
+       badly blighted one — keeps green somewhere in the frame. */
+    green: green / total,
+    detail,
   };
 }
 
@@ -500,6 +524,18 @@ const MAX_SIGNATURE_DISTANCE = 0.42;
 /* At least this much of the frame must read as plant tissue before we are
    willing to name a disease. */
 const MIN_TISSUE_COVERAGE = 0.35;
+/* And some of it must actually be green. Measured across the test set, every
+   non-plant scores exactly 0 here — skin, soil, cardboard, straw, brick,
+   coffee, denim, concrete — while leaves run 0.19 to 1.0, so this is a wide
+   gap rather than a tuned edge. It replaces the signature distance as the
+   thing keeping a photo of a desk out: those were being turned away on
+   margins as thin as 0.02, which is luck, not a gate. */
+const MIN_GREEN_COVERAGE = 0.12;
+/* Mean local contrast. Green paint, a green shirt and a green car all score
+   full marks on colour and cannot be told from foliage by hue alone — they
+   score 0 to 0.008 here, where real leaves and photographs run 0.016 to 0.086.
+   A leaf has veins, edges and shadow; a painted panel has none. */
+const MIN_DETAIL = 0.012;
 
 function rankDiseases(crop, f) {
   const kb = DISEASE_KB[crop];
@@ -508,23 +544,45 @@ function rankDiseases(crop, f) {
     const dist = Math.hypot(f.chlorosis - d.sig.chlorosis, f.necrosis - d.sig.necrosis, f.spotting - d.sig.spotting);
     if (dist < bestDist) { bestDist = dist; best = d; }
   }
-  // Two independent gates: the frame must look like a leaf, and its damage
-  // signature must actually be close to something in the knowledge base.
-  const recognised = f.tissue >= MIN_TISSUE_COVERAGE && bestDist <= MAX_SIGNATURE_DISTANCE;
+  /* Four independent gates, each catching what the others cannot. Colour
+     coverage alone passes a hand or a desk; green alone passes a painted
+     wall; texture alone passes a patterned rug; signature alone passes
+     anything vaguely leaf-coloured. A photo has to clear all four.
+
+     The failing gate is carried out so the card can say which one, rather
+     than shrugging at the farmer. */
+  const fails = [];
+  if (f.tissue < MIN_TISSUE_COVERAGE) fails.push('tissue');
+  if ((f.green ?? 0) < MIN_GREEN_COVERAGE) fails.push('green');
+  if ((f.detail ?? 0) < MIN_DETAIL) fails.push('detail');
+  if (bestDist > MAX_SIGNATURE_DISTANCE) fails.push('signature');
+  const recognised = fails.length === 0;
   const confidence = Math.round(Math.max(40, Math.min(96, (1 - bestDist) * 100)));
-  return { disease: best, confidence, features: f, recognised, distance: bestDist };
+  return { disease: best, confidence, features: f, recognised, distance: bestDist, fails };
 }
 
-function renderUnrecognised(features) {
+/* Says which check the photo failed. "Not recognised" on its own invites the
+   farmer to shoot the same unusable picture again. */
+const REJECTION_REASON = {
+  green: 'Almost no green in the frame — this does not look like living leaf tissue.',
+  detail: 'The image is too flat and uniform to be a photograph of a leaf. Painted surfaces and plain fabric look like this.',
+  tissue: 'Too little of the frame reads as plant tissue at all.',
+  signature: 'The frame looks like a plant, but its damage pattern matches nothing in the knowledge base for this crop.',
+};
+
+function renderUnrecognised(features, fails = []) {
   $('#doctorEmpty').style.display = 'none';
   const card = $('#diagnosisCard');
   card.hidden = false;
+  // The order of REJECTION_REASON is the order worth reporting: lead with the
+  // most concrete thing wrong with the picture.
+  const reason = ['green', 'detail', 'tissue', 'signature'].find(k => fails.includes(k));
   card.innerHTML = `
     <div class="diag-head">
       <div class="diag-name">🔍 Not recognised as a crop leaf</div>
       <span class="sev unknown">no diagnosis</span>
     </div>
-    <div class="diag-sci">The colour signature of this image does not match any leaf in the knowledge base.</div>
+    <div class="diag-sci">${esc(REJECTION_REASON[reason] || REJECTION_REASON.signature)}</div>
     <div class="diag-section"><h4>Try again</h4>
       <ul>
         <li>Fill the frame with a single leaf, front-lit and in focus</li>
@@ -532,13 +590,14 @@ function renderUnrecognised(features) {
         <li>Check you picked the right crop above</li>
       </ul></div>
     <div class="diag-section"><h4>What the scan saw</h4>
-      <p>Only ${(features.tissue * 100).toFixed(0)}% of the frame reads as plant tissue
+      <p>${(features.tissue * 100).toFixed(0)}% of the frame reads as plant tissue,
+         ${((features.green ?? 0) * 100).toFixed(0)}% of it green
          (yellowing ${(features.chlorosis * 100).toFixed(0)}% · browning ${(features.necrosis * 100).toFixed(0)}% ·
          dark lesions ${(features.spotting * 100).toFixed(0)}%).</p></div>`;
 }
 
-function renderDiagnosis({ disease, confidence, features, recognised }) {
-  if (!recognised) return renderUnrecognised(features);
+function renderDiagnosis({ disease, confidence, features, recognised, fails }) {
+  if (!recognised) return renderUnrecognised(features, fails);
   $('#doctorEmpty').style.display = 'none';
   const card = $('#diagnosisCard');
   const healthy = disease.severity === 'none';
