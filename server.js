@@ -7,6 +7,23 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+
+/* node:sqlite ships from Node 22.5. On anything older the require below dies
+   with "Cannot find module 'node:sqlite'", which reads like a missing package
+   and sends people off running npm install for a dependency that does not
+   exist. Say what is actually wrong instead — this is the first thing anyone
+   opening the project on a different machine will hit. */
+{
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 22 || (major === 22 && minor < 5)) {
+    console.error(
+      `\n  MavunoAI needs Node 22.5 or newer — this is Node v${process.versions.node}.\n` +
+      `  It stores data with node:sqlite, which older versions do not ship.\n\n` +
+      `  Install a current Node from https://nodejs.org, then run npm start again.\n`);
+    process.exit(1);
+  }
+}
+
 const { DatabaseSync } = require('node:sqlite');
 
 function loadEnvFile() {

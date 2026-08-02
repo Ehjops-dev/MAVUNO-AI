@@ -21,18 +21,34 @@ becomes a credit score that unlocks collateral-free input loans paid out to M-PE
 
 ## Quick start
 
+**Node.js 22.5 or later is the only thing you need to install.** Check with `node -v`; if it
+is older, get a current version from [nodejs.org](https://nodejs.org). The server refuses to
+start on anything earlier and says so, because it stores data with `node:sqlite`, which older
+versions do not ship.
+
+From a clone:
+
 ```bash
 git clone https://github.com/Ehjops-dev/MAVUNO-AI.git
 cd MAVUNO-AI
 npm start                 # http://localhost:4500
 ```
 
-Node.js 22.5 or later is the only requirement, and there is no install or build step before
-`npm start` — the server runs entirely on Node built-ins, including `node:sqlite`. Run
-`npm install` only if you want to regenerate the documents in `docs/`, which is the sole
-reason the project has any packages at all.
+From a zip: unpack it, open a terminal in the folder that contains `package.json`, and run
+`npm start`.
 
-The database is created and seeded on first run.
+There is **no `npm install`** and no build step. The server runs entirely on Node built-ins,
+and the database is created and seeded on first run — the first boot prints
+`price feed topped up` and then the address to open. Run `npm install` only if you want to
+regenerate the documents in `docs/`, which is the sole reason the project has any packages at
+all.
+
+If the port is busy, `npm start` fails with `EADDRINUSE`. Free it and try again:
+
+```bash
+fuser -k 4500/tcp             # macOS/Linux
+npx kill-port 4500            # any platform
+```
 
 Farmers and administrators sign in at the same form; the role stored on the account decides
 which interface loads. Seeded accounts:
