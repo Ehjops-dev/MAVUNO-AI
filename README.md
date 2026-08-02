@@ -3,7 +3,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.5-3c873a)](https://nodejs.org)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)](package.json)
 [![Tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)](tests/api.test.js)
-[![License](https://img.shields.io/badge/license-MIT-blue)](#license)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Farm intelligence and agri-credit platform for smallholder farmers in Kenya. Farmers diagnose
 crop disease from a photo, compare market prices, and log harvests — and that harvest history
@@ -11,7 +11,7 @@ becomes a credit score that unlocks collateral-free input loans paid out to M-PE
 
 ## Features
 
-- **Crop Doctor** — leaf photo in, diagnosis and treatment plan out. Runs entirely in the browser, so it works offline and the image is never uploaded.
+- **Crop Doctor** — leaf photo in, diagnosis and treatment plan out. Runs entirely in the browser, so it works offline and the image is never uploaded. Four gates decide whether the photo is a leaf at all; anything else is declined rather than diagnosed.
 - **Market prices** — 60-day price history for 5 crops across 5 markets, ranked by best price today.
 - **Harvest ledger** — record crop, quantity, price and market for every harvest.
 - **Mavuno Score** — a 300–850 credit score built from season consistency, yield trend, crop diversification, market timing and repayment history.
@@ -19,16 +19,28 @@ becomes a credit score that unlocks collateral-free input loans paid out to M-PE
 - **Admin console** — portfolio analytics, farmer register, credit book and audit trail.
 - **Works offline** — service worker caches the app shell and the last known data.
 
-## Requirements
+## Screenshots
 
-Node.js 22.5 or later. Nothing else — the server runs on Node built-ins, including
-`node:sqlite`, and there is no install or build step.
+| Farmer dashboard | Crop Doctor |
+| --- | --- |
+| ![Farmer dashboard](docs/figures/shot_dashboard.png) | ![Crop Doctor diagnosis](docs/figures/shot_doctor.png) |
 
-## Usage
+| Market prices | Credit and loans |
+| --- | --- |
+| ![Market price comparison](docs/figures/shot_markets.png) | ![Credit score and loan offers](docs/figures/shot_credit.png) |
+
+## Quick start
 
 ```bash
+git clone https://github.com/Ehjops-dev/MAVUNO-AI.git
+cd MAVUNO-AI
 npm start                 # http://localhost:4500
 ```
+
+Node.js 22.5 or later is the only requirement, and there is no install or build step before
+`npm start` — the server runs entirely on Node built-ins, including `node:sqlite`. Run
+`npm install` only if you want to regenerate the documents in `docs/`, which is the sole
+reason the project has any packages at all.
 
 The database is created and seeded on first run.
 
@@ -42,10 +54,23 @@ which interface loads. Seeded accounts:
 | Mary (farmer) | 0734 567 890 | 1234 |
 | Administrator | 0700 000 000 | 2468 |
 
+To start over from clean seed data:
+
 ```bash
-npm test                  # 86 tests, no dependencies
 npm run db:reset          # back up to backups/, wipe, re-seed on next start
 ```
+
+## Testing
+
+```bash
+npm test
+```
+
+86 tests on Node's built-in runner, covering the API surface, the scoring engine and the
+security boundaries — session scoping, role enforcement, lockout and the disbursement caps.
+The suite spawns two real servers on isolated temporary databases, so it never touches the
+demo data, and its dates are computed relative to today rather than hard-coded so the cases
+cannot rot. `TESTING.md` records the full case-by-case report.
 
 ## Admin console
 
@@ -114,9 +139,10 @@ Administrator only — every route returns 403 for a farmer session:
 ## Project structure
 
 ```
-MAVUNO/
+MAVUNO-AI/
 ├── server.js                  HTTP server, SQLite, auth, scoring and admin API
 ├── mavuno.db                  SQLite database — created and seeded on first run
+├── .env.example               Every configuration option, documented
 ├── public/                    Single-page client
 │   ├── index.html             Landing, auth, farmer app and admin console
 │   ├── css/style.css          Design tokens and components
@@ -127,7 +153,12 @@ MAVUNO/
 │   └── manifest.webmanifest   PWA manifest and icons
 ├── scripts/reset-db.js        Database backup, wipe and re-seed
 ├── tests/api.test.js          API and security test suite
-└── docs/                      Design system, documentation and pitch deck
+├── TESTING.md                 Case-by-case system test report
+└── docs/
+    ├── DESIGN.md              Design system and interface rationale
+    ├── PRESENTER-GUIDE.md     Demo script
+    ├── figures/               Architecture diagrams and screenshots
+    └── make_*.js              Generators for the documentation and pitch deck
 ```
 
 ## Security
@@ -150,4 +181,4 @@ demo mode. See `docs/` for the full project documentation.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
