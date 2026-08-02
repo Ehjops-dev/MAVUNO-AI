@@ -104,15 +104,35 @@ $$('#adminApp .nav-item').forEach(btn =>
   btn.addEventListener('click', () => showAdminView(btn.dataset.adminView)));
 
 const adminNarrow = () => window.matchMedia('(max-width: 860px)').matches;
+
+/* Mirrors setDrawer() in app.js — rail, scrim and body scroll lock move
+   together so the console's drawer behaves exactly like the farmer app's. */
+function setAdminDrawer(open) {
+  $('#adminSidebar')?.classList.toggle('open', open);
+  const scrim = $('#adminNavScrim');
+  if (scrim) scrim.hidden = !open;
+  document.body.classList.toggle('nav-open', open);
+  $('#adminMenuToggle')?.setAttribute('aria-expanded', String(open));
+}
+
 const closeAdminSidebar = () => {
+  if (adminNarrow()) { setAdminDrawer(false); return; }
   $('#adminSidebar')?.classList.remove('open');
-  if (adminNarrow()) $('#adminMenuToggle')?.setAttribute('aria-expanded', 'false');
 };
+
+$('#adminNavScrim')?.addEventListener('click', () => setAdminDrawer(false));
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#adminSidebar')?.classList.contains('open')) setAdminDrawer(false);
+});
+
+window.matchMedia('(max-width: 860px)').addEventListener('change', e => {
+  if (!e.matches) setAdminDrawer(false);
+});
 
 $('#adminMenuToggle')?.addEventListener('click', () => {
   if (adminNarrow()) {
-    const open = $('#adminSidebar').classList.toggle('open');
-    $('#adminMenuToggle').setAttribute('aria-expanded', String(open));
+    setAdminDrawer(!$('#adminSidebar').classList.contains('open'));
     return;
   }
   const collapsed = $('#adminApp').classList.toggle('nav-collapsed');

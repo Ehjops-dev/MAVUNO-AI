@@ -59,12 +59,16 @@
 /* The console's workhorse: a label, an optional bar, and a figure. Used for
    portfolio health, counties, crop mix and every system panel. */
 .admin-list { display: flex; flex-direction: column; }
+/* minmax(0, 1fr) rather than 1fr: a grid track sized 1fr still refuses to go
+   below its content's min-content width, so one unbreakable string in the key
+   column — the database path on the System panel is the live example — widened
+   the row past the viewport and gave the whole console a sideways scroll. */
 .al-row {
-  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px 14px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 14px;
   padding: 13px 0; border-bottom: 1px solid var(--line-soft);
 }
 .al-row:last-child { border-bottom: 0; }
-.al-key { font-size: 13.5px; font-weight: 500; color: var(--ink); }
+.al-key { font-size: 13.5px; font-weight: 500; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
 .al-key small { display: block; font-size: 11.5px; font-weight: 500; color: var(--muted); margin-top: 3px; }
 .al-value {
   font-size: 14.5px; font-weight: 700; color: var(--ink-strong);
@@ -84,7 +88,7 @@
 
 /* stat strip under the sign-up chart */
 .admin-substats {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 2px; margin-top: 20px; background: var(--line-soft);
   border: 1px solid var(--line-soft); border-radius: 14px; overflow: hidden;
 }
@@ -189,7 +193,7 @@
 .field textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(22, 163, 74, .12); }
 
 /* farmer file */
-.file-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 2px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: 14px; overflow: hidden; margin-bottom: 22px; }
+.file-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr)); gap: 2px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: 14px; overflow: hidden; margin-bottom: 22px; }
 .file-cell { background: var(--surface); padding: 15px 16px; }
 .file-label { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .file-value { font-size: 16px; font-weight: 700; color: var(--ink-strong); margin-top: 6px; font-variant-numeric: tabular-nums; }
@@ -220,4 +224,29 @@
   .toolbar { width: 100%; margin-left: 0; }
   .admin-search { min-width: 0; flex: 1; }
   .card-title { align-items: flex-start; }
+}
+
+@media (pointer: coarse), (max-width: 620px) {
+  .al-row { padding-block: 15px; }
+  .admin-search, .admin-select { min-height: 44px; }
+}
+
+@media (max-width: 620px) {
+  /* The search shared one line with both selects and lost, collapsing to about
+     a hundred pixels — enough for one letter of its own placeholder. It takes
+     the first row on its own now and the two filters split the second. */
+  .admin-search { flex: 1 0 100%; }
+  .admin-select { flex: 1 1 130px; min-width: 0; }
+
+  /* The value column is nowrap by design — money and counts should never break
+     mid-figure — so on a phone the pair stacks instead of competing for width. */
+  .al-row { grid-template-columns: 1fr; }
+  .al-value { text-align: left; }
+  .al-value small { display: inline; margin: 0 0 0 6px; }
+  .notice { flex-direction: column; gap: 12px; padding: 16px 18px; }
+  .notice-actions { width: 100%; }
+  .modal-head { flex-direction: column; gap: 10px; }
+  .temp-pin { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .activity-feed { max-height: none; }
+  .file-actions .btn { flex: 1; }
 }

@@ -356,6 +356,10 @@
 <!-- ================================================================ APP -->
 <div class="app" id="app" hidden>
 
+  <!-- Dimmer behind the drawer on phones. Tapping it closes the rail, which is
+       the gesture people reach for before they look for the toggle again. -->
+  <div class="nav-scrim" id="navScrim" hidden></div>
+
   <!-- ===================== SIDEBAR ===================== -->
   <aside class="sidebar" id="sidebar">
     <div class="brand">
@@ -676,6 +680,8 @@
      operator who has seen one screen can read the other. What differs is scope:
      every number here is platform-wide, and every write is audited. -->
 <div class="app admin-app" id="adminApp" hidden>
+
+  <div class="nav-scrim" id="adminNavScrim" hidden></div>
 
   <aside class="sidebar" id="adminSidebar">
     <div class="brand">

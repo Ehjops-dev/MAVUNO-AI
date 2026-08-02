@@ -196,23 +196,48 @@ $$('#app [data-goto]').forEach(el => el.addEventListener('click', () => showView
    and the choice is remembered for the session. */
 const NARROW = () => window.matchMedia('(max-width: 860px)').matches;
 
+/* Drawer state lives in three places that must agree: the rail's transform,
+   the scrim behind it, and the scroll lock on <body>. setDrawer is the only
+   thing allowed to move them, so they cannot drift apart. */
+function setDrawer(open) {
+  $('#sidebar')?.classList.toggle('open', open);
+  const scrim = $('#navScrim');
+  if (scrim) scrim.hidden = !open;
+  document.body.classList.toggle('nav-open', open);
+  $('#menuToggle')?.setAttribute('aria-expanded', String(open));
+}
+
 const closeSidebar = () => {
+  if (NARROW()) { setDrawer(false); return; }
   $('#sidebar')?.classList.remove('open');
-  if (NARROW()) $('#menuToggle')?.setAttribute('aria-expanded', 'false');
 };
+
+$('#navScrim')?.addEventListener('click', () => setDrawer(false));
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#sidebar')?.classList.contains('open')) setDrawer(false);
+});
+
+/* Crossing back to the desktop breakpoint with the drawer open would otherwise
+   leave <body> locked and the scrim covering a layout that no longer needs it. */
+window.matchMedia('(max-width: 860px)').addEventListener('change', e => {
+  if (!e.matches) setDrawer(false);
+});
 
 function setRailCollapsed(collapsed) {
   $('#app').classList.toggle('nav-collapsed', collapsed);
-  $('#menuToggle').setAttribute('aria-expanded', String(!collapsed));
   $('#menuToggle').setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
+  // On a phone the same button drives the drawer, and the drawer starts shut:
+  // announcing the remembered desktop rail state there would be a lie.
+  if (!NARROW()) $('#menuToggle').setAttribute('aria-expanded', String(!collapsed));
+  else $('#menuToggle').setAttribute('aria-expanded', String($('#sidebar').classList.contains('open')));
   sessionStorage.setItem('mavuno_nav_collapsed', collapsed ? '1' : '0');
 }
 setRailCollapsed(sessionStorage.getItem('mavuno_nav_collapsed') === '1');
 
 $('#menuToggle').addEventListener('click', () => {
   if (NARROW()) {
-    const open = $('#sidebar').classList.toggle('open');
-    $('#menuToggle').setAttribute('aria-expanded', String(open));
+    setDrawer(!$('#sidebar').classList.contains('open'));
     return;
   }
   setRailCollapsed(!$('#app').classList.contains('nav-collapsed'));
