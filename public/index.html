@@ -285,10 +285,17 @@
       <button type="button" class="link-btn" id="goToSignup">Create an account</button>
     </p>
 
+    <!-- One panel, not two. The administrator signs in through this very form —
+         only the seeded role differs — so the credentials belong together, and
+         a second box cost ~70px of card height in a card that must not scroll.
+         The rule is split off rather than shown as another <strong>, because
+         .login-hint styles the first <strong> as a block heading and every
+         later one inline. -->
     <p class="login-hint">
       <strong>Demo accounts</strong>
       0712 345 678 · Amina &nbsp;·&nbsp; 0723 456 789 · John &nbsp;·&nbsp; 0734 567 890 · Mary<br>
       PIN <strong>1234</strong> for all three.
+      <span class="hint-admin"><b>Administrator</b> 0700 000 000 · PIN <b>2468</b></span>
     </p>
   </form>
 </div>

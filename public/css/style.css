@@ -406,6 +406,12 @@ a { color: inherit; text-decoration: none; }
 }
 .login-hint strong { display: block; color: var(--primary-deep); font-weight: 700; margin-bottom: 4px; }
 .login-hint strong:not(:first-child) { display: inline; }
+/* The operator's line, ruled off from the farmers' inside the same panel. */
+.login-hint .hint-admin {
+  display: block; margin-top: 6px; padding-top: 6px;
+  border-top: 1px dashed var(--line-strong);
+}
+.login-hint .hint-admin b { color: var(--primary-deep); font-weight: 700; }
 .login-card .link-btn { align-self: center; color: var(--muted); }
 /* The card is a flex column with its own gap, so the modal row's margin would
    double the spacing here. */
@@ -902,6 +908,21 @@ a { color: inherit; text-decoration: none; }
   .login-hint { line-height: 1.6; padding: 10px 13px; }
 }
 
+/* One notch tighter again, for the short window where the card was still
+   overflowing its own frame and scrolling inside itself. Same principle as the
+   admin rail: buy the space out of padding and leading, never out of the field
+   type — those stay 16px under 860px so Safari does not zoom the viewport on
+   focus, and shrinking them here would undo that. */
+@media (max-height: 680px) {
+  .login-card { gap: 10px; padding: 22px 24px; }
+  .login-title { font-size: 19.5px; }
+  .login-sub { font-size: 13px; }
+  .login-card .btn-lg { padding: 12px 24px; }
+  .login-hint { line-height: 1.5; padding: 9px 12px; }
+  .login-hint .hint-admin { margin-top: 5px; padding-top: 5px; }
+  .back-home { top: 14px; left: 16px; padding: 8px 15px 8px 12px; }
+}
+
 /* ============================================================ responsive */
 @media (max-width: 1240px) {
   /* KPIs go two-up; guidance and credit each take the full width. */
@@ -1072,6 +1093,28 @@ a { color: inherit; text-decoration: none; }
   .lp-cta-row .btn { width: 100%; }
   .kpi { padding: 18px 18px; }
   .view-head { gap: 14px; }
+}
+
+/* Narrow and short at once — a small handset, or a phone held in landscape.
+   The sign-in card was 12px taller than the frame could hold, so it scrolled
+   inside itself. Placed after the max-width: 860px block deliberately: that
+   block sets the screen's padding, and this has to come later to win. The
+   space is taken from the screen's own padding and the back-home chip rather
+   than from anything in the card, which is already at its floor. */
+@media (max-height: 700px) and (max-width: 620px) {
+  .login-screen { padding: 12px 14px 14px; }
+  .back-home { margin-bottom: 8px; }
+  .login-card { padding: 20px 20px; }
+}
+
+/* The smallest handsets, and any phone short enough that the last few pixels
+   still would not fit. Nothing left to take but leading and padding — the
+   fields hold at 16px throughout. */
+@media (max-height: 660px) and (max-width: 620px) {
+  .login-screen { padding: 10px 12px 12px; }
+  .back-home { margin-bottom: 6px; }
+  .login-card { gap: 8px; padding: 18px 18px; }
+  .login-hint { padding: 8px 11px; line-height: 1.45; }
 }
 
 /* The horizontal table scrollers must not hand the gesture to the browser's

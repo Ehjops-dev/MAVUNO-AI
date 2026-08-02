@@ -216,6 +216,73 @@
 .temp-pin strong { font-size: 26px; font-weight: 700; letter-spacing: .18em; color: var(--primary-deep); font-variant-numeric: tabular-nums; }
 .temp-pin span { font-size: 12.5px; line-height: 1.55; color: var(--muted); }
 
+/* ================================================================== RAIL */
+/* The console carries nine destinations across two groups — half again what
+   the farmer app needs — so this is the one column that can outgrow the
+   screen. Measured at 689px of content: that overflows a 640px-tall viewport
+   by 49px and ran a scrollbar down the navigation, which on a rail reads as
+   broken rather than as more to see.
+
+   The rail is a fixed frame here, and it earns that by spending less height
+   as the viewport gets shorter rather than by scrolling. Desktop only: below
+   861px the rail is an overlay drawer whose own scrolling is deliberate. */
+@media (min-width: 861px) {
+  .admin-app .sidebar { overflow: hidden; }
+
+  /* "Operations" sat flush against the last item of the Platform group, so
+     nine entries read as one undifferentiated run. The gap is what makes the
+     two labels do their job. */
+  .admin-app .nav + .nav-label { margin-top: 20px; }
+}
+
+/* Short laptops and projectors — where the 49px of bleed showed up. Every
+   value below comes out of padding and gaps, never type size or the icon, so
+   the rail reads as the same design at a tighter rhythm rather than a shrunken
+   one. 689px → 615px, clearing a 640px viewport. */
+@media (min-width: 861px) and (max-height: 780px) {
+  .admin-app .brand { padding-bottom: 14px; }
+  .admin-app .nav-label { margin-bottom: 7px; }
+  .admin-app .nav + .nav-label { margin-top: 13px; }
+  .admin-app .nav { gap: 3px; }
+  .admin-app .nav-item { padding-block: 9px; }
+  .admin-app .sidebar-foot { padding-top: 10px; }
+  .admin-app .signout-btn { padding-block: 9px; }
+  .admin-app .profile { padding-block: 7px; }
+}
+
+/* One more notch for the genuinely short window — a small laptop carrying a
+   bookmarks bar and a downloads shelf. 615px → 597px. */
+@media (min-width: 861px) and (max-height: 660px) {
+  .admin-app .brand { padding-bottom: 11px; }
+  .admin-app .nav-item { padding-block: 8px; }
+  .admin-app .signout-btn { padding-block: 8px; }
+}
+
+/* Below this the rail cannot be made to fit without hiding something, and the
+   something would be Sign out. Scrolling an unreachable control into reach
+   beats clipping it away, so the frame gives up gracefully rather than
+   trapping the operator. */
+@media (min-width: 861px) and (max-height: 560px) {
+  .admin-app .sidebar { overflow-y: auto; overscroll-behavior: contain; }
+}
+
+/* Last on purpose: this has to win over every rule above it.
+
+   style.css floors `.nav-item` at 48px for coarse pointers, and a min-height
+   beats any padding trimmed above it — so on a touch device the rail keeps
+   growing while `overflow: hidden` denies it anywhere to go, and Sign out is
+   clipped off the bottom with no way to reach it. Big hit targets are worth
+   more than a fixed frame, so a coarse pointer keeps both the 48px and its
+   scroll.
+
+   Written as an override rather than as `(pointer: fine)` on the rules above,
+   because a device with no pointing device at all reports `pointer: none` and
+   would have been excluded by that gate — headless Chrome is exactly such an
+   environment, which is how this was caught. */
+@media (pointer: coarse) {
+  .admin-app .sidebar { overflow-y: auto; overscroll-behavior: contain; }
+}
+
 /* ---------------------------------------------------------- responsive */
 @media (max-width: 1020px) {
   .admin-split { grid-template-columns: 1fr; }
