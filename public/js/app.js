@@ -185,14 +185,31 @@ $$('.nav-item').forEach(btn => btn.addEventListener('click', () => showView(btn.
 // Cards can deep-link into a view ("View Mavuno Score", "Full report").
 $$('[data-goto]').forEach(el => el.addEventListener('click', () => showView(el.dataset.goto)));
 
-/* mobile sidebar */
+/* Sidebar toggle. One control, two jobs: on a phone the rail is an overlay
+   drawer, so it slides in and out; on a desktop it collapses to an icon rail
+   and the choice is remembered for the session. */
+const NARROW = () => window.matchMedia('(max-width: 860px)').matches;
+
 const closeSidebar = () => {
   $('#sidebar')?.classList.remove('open');
-  $('#menuToggle')?.setAttribute('aria-expanded', 'false');
+  if (NARROW()) $('#menuToggle')?.setAttribute('aria-expanded', 'false');
 };
+
+function setRailCollapsed(collapsed) {
+  $('#app').classList.toggle('nav-collapsed', collapsed);
+  $('#menuToggle').setAttribute('aria-expanded', String(!collapsed));
+  $('#menuToggle').setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
+  sessionStorage.setItem('mavuno_nav_collapsed', collapsed ? '1' : '0');
+}
+setRailCollapsed(sessionStorage.getItem('mavuno_nav_collapsed') === '1');
+
 $('#menuToggle').addEventListener('click', () => {
-  const open = $('#sidebar').classList.toggle('open');
-  $('#menuToggle').setAttribute('aria-expanded', String(open));
+  if (NARROW()) {
+    const open = $('#sidebar').classList.toggle('open');
+    $('#menuToggle').setAttribute('aria-expanded', String(open));
+    return;
+  }
+  setRailCollapsed(!$('#app').classList.contains('nav-collapsed'));
 });
 
 function toast(msg) {
@@ -247,6 +264,10 @@ async function loadDashboard() {
   $('#mScore').innerHTML = (firstRun ? '<span class="metric-none">—</span>' : d.score) +
     '<span class="metric-of">/ 850</span>';
   $('#mTier').textContent = d.tier;
+  // The band is 300–850, so fill the bar against that range rather than 0–850,
+  // where every real score would start two thirds of the way along.
+  $('#scoreBar').style.width =
+    firstRun ? '0%' : Math.max(2, Math.min(100, ((d.score - 300) / 550) * 100)) + '%';
   $('#mRevenue').textContent = KES(d.totalRevenue);
   $('#mHarvests').textContent = d.harvestCount;
   $('#mProduce').textContent = (d.totalKg / 1000).toFixed(1) + ' t';
@@ -266,6 +287,12 @@ async function loadDashboard() {
   $('#topAdviceBody').textContent = firstRun
     ? 'Log your first harvest — one entry activates your Mavuno Score, credit offers and market timing.'
     : advisory.length ? `${advisory[0].title} — ${advisory[0].body}` : '—';
+
+  const rainTotal = d.weather.reduce((sum, w) => sum + (w.rain_mm || 0), 0);
+  const wetDays = d.weather.filter(w => w.rain_mm > 0).length;
+  $('#weatherFoot').textContent = rainTotal
+    ? `≈ ${rainTotal} mm expected over ${wetDays} wet ${wetDays === 1 ? 'day' : 'days'} — plan spraying around it.`
+    : 'No rain forecast this week — irrigate where you can.';
 
   $('#weatherStrip').innerHTML = d.weather.map(w => `
     <div class="weather-day">
@@ -294,7 +321,7 @@ async function loadDashboard() {
     chip.className = 'chip ' + (fresh ? 'chip-ok' : 'chip-warn');
   }
 
-  $('#adviceGrid').innerHTML = advisory.map(a => `
+  $('#adviceGrid').innerHTML = advisory.slice(firstRun ? 0 : 1).map(a => `
     <div class="advice">
       <div class="a-icon" aria-hidden="true">${ADVICE_EMOJI[a.icon] || '🌾'}</div>
       <div class="a-title">${esc(a.title)}</div>
@@ -307,9 +334,8 @@ async function loadDashboard() {
 function renderAccount(farmer) {
   const initials = farmer.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   $('#topAvatar').textContent = initials;
-  $('#topFarmerName').textContent = farmer.name.split(' ')[0];
-  $('#menuFarmerName').textContent = farmer.name;
-  $('#menuFarmerMeta').textContent = `${farmer.county} · ${farmer.farm_size_acres} acres`;
+  $('#topFarmerName').textContent = farmer.name;
+  $('#topFarmerMeta').textContent = `${farmer.county} · ${farmer.farm_size_acres} acres`;
 }
 
 /* ------------------------------------------------ crop doctor */
@@ -504,7 +530,11 @@ async function loadScanHistory() {
           <span class="s-disease">${esc(r.disease)}</span>
           <span class="s-meta">${esc(r.crop)} · ${Math.round(r.confidence)}% · ${esc(new Date(r.created_at + 'Z').toLocaleDateString('en-KE', { day: 'numeric', month: 'short' }))}</span>
         </div>`).join('')
-    : '<div class="scan-row"><span class="s-meta">No scans yet — your scan history builds your farm health record.</span></div>';
+    : `<div class="empty-state">
+         <span class="empty-icon" aria-hidden="true">🔍</span>
+         <p class="empty-title">No scans yet</p>
+         <p class="empty-hint">Every leaf you photograph is saved here, building a health record for the farm.</p>
+       </div>`;
 }
 
 /* ------------------------------------------------ markets */
@@ -526,9 +556,27 @@ async function loadMarkets(crop) {
   drawPriceChart(d.series);
 
   const top = d.best[0];
+  const bottom = d.best[d.best.length - 1];
   if (top) {
     $('#bestMarketName').textContent = top.market;
     $('#bestMarketPrice').textContent = top.price.toFixed(1);
+  }
+
+  /* The gap between the best and worst market is the number that actually
+     changes behaviour, so state it in shillings per kg and then in the money a
+     typical load would gain — the abstract spread means little on its own. */
+  if (top && bottom && d.best.length > 1) {
+    const gap = top.price - bottom.price;
+    const pct = (gap / bottom.price) * 100;
+    const perTonne = gap * 1000;
+    $('#spreadValue').textContent = gap.toFixed(1);
+    $('#spreadNote').textContent =
+      `${esc(top.market)} is paying ${pct.toFixed(0)}% more than ${esc(bottom.market)} for ${esc(crop)} today.`;
+    $('#spreadFoot').textContent = `≈ ${KES(perTonne)} on every tonne you move`;
+  } else {
+    $('#spreadValue').textContent = '—';
+    $('#spreadNote').textContent = 'Not enough markets reporting today to compare.';
+    $('#spreadFoot').textContent = '';
   }
 
   $('#bestMarkets').innerHTML = d.best.map((b, i) => `
@@ -543,7 +591,7 @@ async function loadMarkets(crop) {
 
 function drawPriceChart(series) {
   const svg = $('#priceChart');
-  const W = 720, H = 300, PAD = { l: 42, r: 12, t: 14, b: 26 };
+  const W = 720, H = 300, PAD = { l: 42, r: 30, t: 14, b: 26 };
   const markets = Object.keys(series);
   const all = markets.flatMap(m => series[m].map(p => p.price_per_kg));
   const min = Math.min(...all) * 0.96, max = Math.max(...all) * 1.04;
@@ -701,23 +749,31 @@ function renderHarvestStats(rows) {
   $('#statRow').innerHTML = `
     <div class="stat">
       <div class="stat-icon" aria-hidden="true">📦</div>
-      <div class="stat-num">${(totalKg / 1000).toFixed(1)}<small> t</small></div>
-      <div class="stat-label">Total produce</div>
+      <div>
+        <div class="stat-num">${(totalKg / 1000).toFixed(1)}<small> t</small></div>
+        <div class="stat-label">Total produce</div>
+      </div>
     </div>
     <div class="stat">
       <div class="stat-icon" aria-hidden="true">💰</div>
-      <div class="stat-num">${KES(revenue)}</div>
-      <div class="stat-label">Lifetime revenue</div>
+      <div>
+        <div class="stat-num">${KES(revenue)}</div>
+        <div class="stat-label">Lifetime revenue</div>
+      </div>
     </div>
     <div class="stat">
       <div class="stat-icon" aria-hidden="true">🧾</div>
-      <div class="stat-num">${rows.length}<small> entries</small></div>
-      <div class="stat-label">${sold} sold · ${rows.length - sold} in storage</div>
+      <div>
+        <div class="stat-num">${rows.length}<small> entries</small></div>
+        <div class="stat-label">${sold} sold · ${rows.length - sold} in storage</div>
+      </div>
     </div>
     <div class="stat">
       <div class="stat-icon" aria-hidden="true">🌦️</div>
-      <div class="stat-num">${seasons}</div>
-      <div class="stat-label">Seasons on record</div>
+      <div>
+        <div class="stat-num">${seasons}</div>
+        <div class="stat-label">Seasons on record</div>
+      </div>
     </div>`;
 }
 
@@ -754,7 +810,6 @@ document.addEventListener('keydown', e => {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
-$('#addHarvestBtn').addEventListener('click', () => openModal('harvestModal'));
 $('#cancelHarvest').addEventListener('click', () => closeModal('harvestModal'));
 $('#harvestModal').addEventListener('click', e => { if (e.target.id === 'harvestModal') closeModal('harvestModal'); });
 
@@ -863,7 +918,11 @@ async function loadCredit() {
             ${l.status === 'approved' ? `<button type="button" class="btn btn-ghost btn-sm btn-repay" data-id="${esc(l.id)}">Repay</button>` : ''}
           </div>
         </div>`).join('')
-    : '<div class="no-offers">No facilities yet. Approved loans and their repayments appear here.</div>';
+    : `<div class="empty-state">
+         <span class="empty-icon" aria-hidden="true">📄</span>
+         <p class="empty-title">No facilities yet</p>
+         <p class="empty-hint">Approved loans and their repayments appear here once you draw one down.</p>
+       </div>`;
 
   $$('#loanList .btn-repay').forEach(btn => btn.addEventListener('click', async () => {
     btn.textContent = 'Repaying…';
@@ -1116,33 +1175,17 @@ $('#signupForm').addEventListener('submit', async e => {
   }
 });
 
-/* ------------------------------------------------ account menu */
-const accountMenu = () => $('#accountMenu');
-
-function toggleAccountMenu(force) {
-  const open = force ?? accountMenu().hidden;
-  accountMenu().hidden = !open;
-  $('#accountBtn').setAttribute('aria-expanded', String(open));
-}
-
-$('#accountBtn').addEventListener('click', e => { e.stopPropagation(); toggleAccountMenu(); });
-document.addEventListener('click', e => {
-  if (!accountMenu().hidden && !$('#account').contains(e.target)) toggleAccountMenu(false);
-});
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !accountMenu().hidden) toggleAccountMenu(false);
-});
-
+/* ------------------------------------------------ sign out */
 $('#signOutBtn').addEventListener('click', () => {
   clearSession();
-  toggleAccountMenu(false);
+  closeSidebar();
   showLanding();
   toast('Signed out');
 });
 
 /* ------------------------------------------------ log-harvest entry points */
 $('#topLogHarvest').addEventListener('click', () => openModal('harvestModal'));
-$('#sidebarLogHarvest').addEventListener('click', () => { closeSidebar(); openModal('harvestModal'); });
+
 
 /* ------------------------------------------------ boot */
 function refreshActiveView() {

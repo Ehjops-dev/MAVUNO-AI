@@ -364,33 +364,45 @@
       </div>
     </div>
 
+    <p class="nav-label">Farm</p>
     <nav class="nav" aria-label="Main">
       <button type="button" class="nav-item active" data-view="dashboard" aria-current="page">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h8v8H3zm10 0h8v5h-8zM3 13h8v8H3zm10 3h8v5h-8z"/></svg>
-        Dashboard
+        <span class="nav-text">Dashboard</span>
       </button>
       <button type="button" class="nav-item" data-view="doctor">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C8 6 4 8 4 13a8 8 0 0 0 16 0c0-5-4-7-8-11zm0 17a5 5 0 0 1-5-5h2a3 3 0 0 0 3 3z"/></svg>
-        Crop Doctor
+        <span class="nav-text">Crop Doctor</span>
       </button>
       <button type="button" class="nav-item" data-view="markets">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18v2H3zM5 18h3v-7H5zm5.5 0h3V6h-3zm5.5 0h3v-4h-3z"/></svg>
-        Markets
+        <span class="nav-text">Markets</span>
       </button>
       <button type="button" class="nav-item" data-view="harvests">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16l-1.5 10a2 2 0 0 1-2 1.7h-9A2 2 0 0 1 5.5 20zM12 2a5 5 0 0 1 5 5v1H7V7a5 5 0 0 1 5-5zm0 2a3 3 0 0 0-3 3v1h6V7a3 3 0 0 0-3-3z"/></svg>
-        My Harvests
+        <span class="nav-text">My Harvests</span>
       </button>
       <button type="button" class="nav-item" data-view="credit">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8zm1 4v5.6l4.8 2.8-1 1.7L11 13V6z"/></svg>
-        Mavuno Score
+        <span class="nav-text">Mavuno Score</span>
       </button>
     </nav>
 
+    <!-- Identity sits at the foot of the rail rather than the top bar: it fills
+         the dead space the old CTA left behind, and keeps the bar for actions. -->
     <div class="sidebar-foot">
-      <button type="button" class="btn btn-primary btn-block" id="sidebarLogHarvest">
-        <span aria-hidden="true">＋</span> Log harvest
+      <button type="button" class="signout-btn" id="signOutBtn" title="Sign out">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17v-2H5V9h5V7l5 5zM14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5v-2h5V5h-5z"/></svg>
+        <span class="nav-text">Sign out</span>
       </button>
+
+      <div class="profile" id="profile">
+        <span class="avatar" id="topAvatar" aria-hidden="true">—</span>
+        <span class="account-id">
+          <span class="account-name" id="topFarmerName">—</span>
+          <span class="account-meta" id="topFarmerMeta">—</span>
+        </span>
+      </div>
     </div>
   </aside>
 
@@ -399,7 +411,7 @@
 
     <!-- ============ TOP BAR ============ -->
     <header class="topbar">
-      <button type="button" class="icon-btn menu-btn" id="menuToggle" aria-label="Show navigation" aria-expanded="false">
+      <button type="button" class="icon-btn menu-btn" id="menuToggle" aria-label="Collapse navigation" aria-expanded="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
       </button>
 
@@ -408,24 +420,6 @@
       <div class="topbar-actions">
         <span class="chip chip-ok" id="feedChip" title="Price feed status">Prices live</span>
         <button type="button" class="btn btn-primary btn-sm" id="topLogHarvest">＋ Log harvest</button>
-
-        <div class="account" id="account">
-          <button type="button" class="account-btn" id="accountBtn" aria-haspopup="menu" aria-expanded="false">
-            <span class="avatar" id="topAvatar" aria-hidden="true">—</span>
-            <span class="account-name" id="topFarmerName">—</span>
-            <svg viewBox="0 0 24 24" class="caret" aria-hidden="true"><path d="M7 10l5 5 5-5z"/></svg>
-          </button>
-          <div class="account-menu" id="accountMenu" role="menu" hidden>
-            <div class="account-head">
-              <div class="account-head-name" id="menuFarmerName">—</div>
-              <div class="account-head-meta" id="menuFarmerMeta">—</div>
-            </div>
-            <button type="button" class="account-item" id="signOutBtn" role="menuitem">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17v-2H5V9h5V7l5 5zM14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5v-2h5V5h-5z"/></svg>
-              Sign out
-            </button>
-          </div>
-        </div>
       </div>
     </header>
 
@@ -440,26 +434,39 @@
           </div>
         </header>
 
+        <!-- 12-column grid: four KPIs, then guidance beside credit, then the
+             two feeds. Every row fills the width, so no card is left hanging. -->
         <div class="bento">
-          <!-- hero metrics -->
-          <div class="card span-2 metrics-card">
-            <div class="metrics-row">
-              <div class="metric">
-                <div class="metric-label">Farm score</div>
-                <div class="metric-value" id="mScore">—<span class="metric-of">/ 850</span></div>
-                <span class="chip chip-mint" id="mTier">—</span>
-              </div>
-              <div class="metric">
-                <div class="metric-label">Eligible credit</div>
-                <div class="metric-value"><span class="metric-cur">KES</span> <span id="mCredit">—</span></div>
-                <div class="metric-note">Available to draw down</div>
-              </div>
-              <div class="metric">
-                <div class="metric-label">Lifetime revenue</div>
-                <div class="metric-value" id="mRevenue">—</div>
-                <div class="metric-note"><span id="mHarvests">—</span> harvests · <span id="mProduce">—</span></div>
-              </div>
+          <article class="card kpi col-3">
+            <div class="kpi-top">
+              <span class="kpi-label">Farm score</span>
+              <span class="chip chip-mint" id="mTier">—</span>
             </div>
+            <div class="kpi-value" id="mScore">—<span class="metric-of">/ 850</span></div>
+            <div class="kpi-track"><span class="kpi-fill" id="scoreBar"></span></div>
+          </article>
+
+          <article class="card kpi col-3">
+            <div class="kpi-top"><span class="kpi-label">Eligible credit</span></div>
+            <div class="kpi-value"><span class="metric-cur">KES</span> <span id="mCredit">—</span></div>
+            <div class="kpi-note">Available to draw down today</div>
+          </article>
+
+          <article class="card kpi col-3">
+            <div class="kpi-top"><span class="kpi-label">Lifetime revenue</span></div>
+            <div class="kpi-value" id="mRevenue">—</div>
+            <div class="kpi-note">Across <span id="mHarvests">—</span> logged harvests</div>
+          </article>
+
+          <article class="card kpi col-3">
+            <div class="kpi-top"><span class="kpi-label">Produce recorded</span></div>
+            <div class="kpi-value" id="mProduce">—</div>
+            <div class="kpi-note">Weighed and sold to market</div>
+          </article>
+
+          <!-- guidance -->
+          <article class="card col-8">
+            <div class="card-title">Guidance for this week</div>
             <div class="recommendation" id="topAdvice">
               <span class="rec-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M9 21h6v-1H9zm3-19a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z" fill="currentColor"/></svg>
@@ -469,36 +476,32 @@
                 <div class="rec-body" id="topAdviceBody">—</div>
               </div>
             </div>
-          </div>
+            <div class="advice-grid" id="adviceGrid"></div>
+          </article>
 
           <!-- credit callout -->
-          <div class="card credit-callout">
+          <article class="card col-4 credit-callout">
             <span class="chip chip-live"><span class="dot" aria-hidden="true"></span> Active intelligence</span>
             <h2 class="card-h2" id="creditCalloutTitle">Your credit standing</h2>
             <p class="muted" id="creditCalloutBody">—</p>
             <button type="button" class="btn btn-dark btn-block" data-goto="credit">View Mavuno Score</button>
-          </div>
+          </article>
 
           <!-- weather -->
-          <div class="card">
-            <div class="card-title">Weather <span class="muted" id="weatherCounty">—</span></div>
+          <article class="card col-6 weather-card">
+            <div class="card-title">5-day weather <span class="muted" id="weatherCounty">—</span></div>
             <div class="weather-strip" id="weatherStrip"></div>
-          </div>
+            <div class="card-foot muted" id="weatherFoot">—</div>
+          </article>
 
           <!-- prices -->
-          <div class="card">
+          <article class="card col-6">
             <div class="card-title">Market trends
               <button type="button" class="link-btn card-title-action" data-goto="markets">Full report</button>
             </div>
             <div class="ticker-list" id="tickerList"></div>
             <div class="card-foot muted" id="pricesAsOf">—</div>
-          </div>
-
-          <!-- advisory -->
-          <div class="card span-2">
-            <div class="card-title">Agronomist's advice this week</div>
-            <div class="advice-grid" id="adviceGrid"></div>
-          </div>
+          </article>
         </div>
       </section>
 
@@ -534,7 +537,12 @@
           <div class="card doctor-result" id="doctorResult">
             <div class="doctor-empty" id="doctorEmpty">
               <div class="pulse-leaf" aria-hidden="true">🍃</div>
-              <p>Diagnosis will appear here.<br>Every scan is saved to your farm record.</p>
+              <p class="doctor-empty-lead">Your diagnosis will appear here</p>
+              <ol class="doctor-steps">
+                <li><span>1</span> Pick the crop, then photograph one affected leaf against a plain background.</li>
+                <li><span>2</span> The colour signature is measured on this device and matched to 14 common diseases.</li>
+                <li><span>3</span> You get the likely cause, a treatment plan and what it will cost to act.</li>
+              </ol>
             </div>
             <div id="diagnosisCard" hidden></div>
           </div>
@@ -559,18 +567,33 @@
         <div class="crop-pills big" id="marketCropPills"></div>
 
         <div class="market-grid">
-          <div class="card best-card" id="bestCard">
-            <span class="chip chip-mint">Best option today</span>
-            <div class="best-market" id="bestMarketName">—</div>
-            <div class="best-price"><span id="bestMarketPrice">—</span><small>KES/kg</small></div>
-            <div class="best-note muted">Highest price across the markets we track.</div>
+          <!-- Left rail stacks the headline price over the spread it implies,
+               so the column no longer runs out halfway down the chart. -->
+          <div class="market-rail">
+            <div class="card best-card" id="bestCard">
+              <span class="chip chip-mint">Best option today</span>
+              <div class="best-market" id="bestMarketName">—</div>
+              <div class="best-price"><span id="bestMarketPrice">—</span><small>KES/kg</small></div>
+              <div class="best-note muted">Highest price across the markets we track.</div>
+            </div>
+            <div class="card spread-card">
+              <div class="card-title">What the spread is worth</div>
+              <div class="spread-value"><span id="spreadValue">—</span><small>KES/kg</small></div>
+              <p class="spread-note muted" id="spreadNote">—</p>
+              <div class="spread-foot" id="spreadFoot">—</div>
+            </div>
           </div>
-          <div class="card span-2">
-            <div class="card-title">60-day price trend · <span id="chartCropLabel">maize</span> <span class="muted">(KES/kg)</span></div>
+
+          <div class="card chart-card">
+            <div class="card-title">
+              60-day price trend · <span class="crop-label" id="chartCropLabel">maize</span>
+              <span class="muted card-title-action">KES per kg</span>
+            </div>
             <div class="chart-wrap"><svg id="priceChart" viewBox="0 0 720 300" preserveAspectRatio="none" role="img" aria-label="Price trend by market"></svg></div>
             <div class="chart-legend" id="chartLegend"></div>
           </div>
-          <div class="card span-3">
+
+          <div class="card market-all">
             <div class="card-title">All markets today</div>
             <div id="bestMarkets" class="best-markets"></div>
           </div>
@@ -585,7 +608,6 @@
             <h1 class="headline">Every bag logged <em>builds your credit.</em></h1>
             <p class="sub">Your harvest history is your strongest financial asset.</p>
           </div>
-          <button type="button" class="btn btn-primary" id="addHarvestBtn">＋ Log harvest</button>
         </header>
 
         <div class="stat-row" id="statRow"></div>
